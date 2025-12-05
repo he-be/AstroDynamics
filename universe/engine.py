@@ -39,6 +39,9 @@ class PhysicsEngine:
             'ganymede': 9887.83,
             'callisto': 7179.28
         }
+        
+        # Heyoka Integrator Cache
+        self.ta = None
 
     def get_body_state(self, body_name: str, time_iso: str):
         """
@@ -161,18 +164,22 @@ class PhysicsEngine:
         y0.extend(v_ship_ssb)
         gms.append(0.0) # Massless ship
         
-        # 3. Setup Integrator
+        # 3. Setup Integrator / Reuse Cache
         # Ensure floats
         y0 = [float(x) for x in y0]
         gms = [float(x) for x in gms]
         
-        # Increase recursion limit to handle complex N-body expression printing if errors occur
-        import sys
-        sys.setrecursionlimit(10000)
-        
-        sys = hy.model.nbody(len(gms), masses=gms)
-        # Note: explicitly passing order as kwarg caused issues in tests. Using default (20).
-        ta = hy.taylor_adaptive(sys, y0)
+        if self.ta is None:
+            # Increase recursion limit to handle complex N-body expression printing if errors occur
+            import sys
+            sys.setrecursionlimit(10000)
+            
+            sys = hy.model.nbody(len(gms), masses=gms)
+            self.ta = hy.taylor_adaptive(sys, y0)
+        else:
+            # Reuse existing integrator (AVOID RECOMPILATION)
+            self.ta.time = 0.0
+            self.ta.state[:] = y0
         
         # 4. Propagate
         if t_eval is not None:
@@ -184,7 +191,7 @@ class PhysicsEngine:
                  
             # propagate_grid returns (times, data)
             # data shape: (N_points, N_vars)
-            res = ta.propagate_grid(grid)
+            res = self.ta.propagate_grid(grid)
             data = res[5] # Index 5 based on debug findings
             
             # Convert back to Jovicentric
@@ -204,11 +211,11 @@ class PhysicsEngine:
             
         else:
             # Propagate to final time
-            ta.propagate_until(float(duration))
+            self.ta.propagate_until(float(duration))
             
             # Extract final state from integrator
             # ta.state is current state vector
-            final_y = ta.state
+            final_y = self.ta.state
             
             # Extract Jup (0-6) and Ship (last 6)
             p_jup = final_y[0:3]

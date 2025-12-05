@@ -34,35 +34,58 @@ def run_solver_test():
     
     curr_time = start_time
     
-    print(f"Verifying Stability for {duration_days} days...")
+    print(f"Verifying Stability for {duration_days} days (High Performance Run)...")
     
-    for i in range(total_steps):
+    # Batch Propagation
+    t_eval = np.arange(0, duration_days * 24 * 3600, dt) + dt # Exclude 0, steps of dt
+    # If 0 is included, it's fine, but verifying usually implies checking FUTURE.
+    # range(total_steps) usually implies 0 to N-1?
+    # Old logic: Loop i from 0 to total_steps-1.
+    # At i=0, curr_time = start_time.
+    # Propagate step (0 -> dt).
+    # Then loop i=1.
+    # So we want state at t=0, t=dt, t=2dt...
+    # But propagate_interpolated was updating `state_opt`.
+    # At start of loop: check dev at t=0. Propagate to t=dt.
+    # So we need output at t=0, dt, 2dt...
+    # t_eval should include 0 if we want initial deviation.
+    # But engine.propagate(t_eval=[0]) returns state at 0 (y0).
+    # Let's use t_eval = [0, dt, 2dt ...].
+    t_eval = np.arange(0, duration_days * 24 * 3600, dt)
+    
+    # Propagate (Heyoka uses reused integrator)
+    print("Propagating Optimized Trajectory...")
+    states_opt_list = engine.propagate(state_opt, start_time, duration_days*24*3600, t_eval=t_eval)
+    
+    print("Propagating Geometric Trajectory...")
+    states_geo_list = engine.propagate(state_geo, start_time, duration_days*24*3600, t_eval=t_eval)
+    
+    # Analyze
+    start_dt = datetime.fromisoformat(start_time.replace('Z', '+00:00'))
+    
+    for i, t_sec in enumerate(t_eval):
+        current_iso = (start_dt + timedelta(seconds=t_sec)).isoformat()
+        
         # Theoretical L4
-        g_pos_now, _ = engine.get_body_state('ganymede', curr_time)
+        g_pos_now, _ = engine.get_body_state('ganymede', current_iso)
         l4_theo = oracle.rotate_vector(g_pos_now, np.pi/3)
         
         # Deviation Opt
-        pos_opt = np.array(state_opt[:3])
+        s_opt = states_opt_list[i]
+        pos_opt = np.array(s_opt[:3])
         d_opt = np.linalg.norm(pos_opt - l4_theo)
         dev_opt.append(d_opt)
         
         # Deviation Geo
-        pos_geo = np.array(state_geo[:3])
+        s_geo = states_geo_list[i]
+        pos_geo = np.array(s_geo[:3])
         d_geo = np.linalg.norm(pos_geo - l4_theo)
         dev_geo.append(d_geo)
         
-        timestamps.append(i * dt / (24*3600))
-        
-        # Propagate
-        state_opt = engine.propagate_interpolated(state_opt, curr_time, dt, cache_step=600)
-        state_geo = engine.propagate_interpolated(state_geo, curr_time, dt, cache_step=600)
-        
-        # Update Time
-        t_obj = datetime.fromisoformat(curr_time.replace('Z', '+00:00'))
-        curr_time = (t_obj + timedelta(seconds=dt)).isoformat()
+        timestamps.append(t_sec / (24*3600))
         
         if i % 100 == 0:
-            print(f"Step {i}/{total_steps}", end='\r')
+            print(f"Analyzing Step {i}/{len(t_eval)}", end='\r')
             
     print("\nVerification Complete.")
     print(f"Final Deviation (Geometric): {dev_geo[-1]:.2f} km")

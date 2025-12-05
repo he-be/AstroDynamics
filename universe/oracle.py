@@ -49,7 +49,8 @@ class Oracle:
         def objective(state_trial):
             # Propagate for full duration
             # Cache step 600s is fine
-            final_state = self.engine.propagate_interpolated(state_trial.tolist(), time_iso, duration, cache_step=600)
+            # Propagate for full duration
+            final_state = self.engine.propagate(state_trial.tolist(), time_iso, duration)
             
             # Checkpoints for RMS: 30d, 60d, 90d
             # Use t_eval to get all points in one propagation
@@ -57,7 +58,8 @@ class Oracle:
             t_eval_checkpoints = [d * 24 * 3600 for d in checkpoints_days]
             
             # Propagate once
-            states = self.engine.propagate_interpolated(state_trial.tolist(), time_iso, duration, cache_step=600, t_eval=t_eval_checkpoints)
+            # Propagate once
+            states = self.engine.propagate(state_trial.tolist(), time_iso, duration, t_eval=t_eval_checkpoints)
             
             total_drift_sq = 0
             
