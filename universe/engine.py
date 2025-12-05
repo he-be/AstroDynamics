@@ -163,153 +163,164 @@ class PhysicsEngine:
         final_state = sol.y[:, -1]
         return final_state.tolist()
 
-    def propagate_interpolated(self, state_vector, time_iso, duration, cache_step=300, t_eval=None):
+    def propagate_heyoka(self, state_vector, time_iso, duration, t_eval=None, order=20):
         """
-        Propagate state vector using interpolated body positions.
+        Fast High-Precision propagation using Heyoka (Taylor Series Integrator).
+        Requires 'heyoka.py' installed (e.g. in Conda environment).
         
         Args:
-            state_vector: Initial state [x, y, z, vx, vy, vz]
+            state_vector: Initial state [x, y, z, vx, vy, vz] (Jovicentric frame)
             time_iso: Start time in ISO format
             duration: Duration in seconds
-            cache_step: Step size for caching body positions (seconds)
             t_eval: Optional list of time points (seconds from start) to evaluate at.
-                    If provided, returns list of state vectors.
-                    If None, returns final state vector.
+            order: Taylor series order (default 20). Lower (e.g. 10) for faster compilation.
+            
+        Returns:
+            Final state vector (list) or list of state vectors if t_eval is provided.
         """
-        from scipy.interpolate import CubicSpline
-        from datetime import datetime, timezone, timedelta
+        try:
+            import heyoka as hy
+        except ImportError:
+            raise ImportError("Heyoka not found. Please install 'heyoka.py' in your environment (see docs/environment_setup.md).")
+            
+        from datetime import datetime, timezone
         
-        # Parse start time
+        # 1. Parse Time
         if time_iso.endswith('Z'):
             time_iso = time_iso[:-1] + '+00:00'
         dt_obj = datetime.fromisoformat(time_iso)
         if dt_obj.tzinfo is None:
             dt_obj = dt_obj.replace(tzinfo=timezone.utc)
+        t_start = self.ts.from_datetime(dt_obj)
+        
+        # 2. Setup N-Body System (Relative to SSB)
+        # We need to construct the full system state y0
+        # Bodies: Jupiter (0), Moons (1-4), Sun (5), Ship (6)
+        
+        y0 = []
+        gms = []
+        
+        # 2a. Jupiter Barycenter (SSB)
+        jup_bary = self.planets['jupiter barycenter']
+        s_jb = jup_bary.at(t_start)
+        p_jb = s_jb.position.km
+        v_jb = s_jb.velocity.km_per_s
+        
+        # Jupiter Center (relative to Jup Bary)
+        jup_center = self.jup_moons['jupiter']
+        s_jc = jup_center.at(t_start)
+        p_jc = s_jc.position.km
+        v_jc = s_jc.velocity.km_per_s
+        
+        # Jupiter Absolute (SSB)
+        p_jup_ssb = p_jb + p_jc
+        v_jup_ssb = v_jb + v_jc
+        
+        y0.extend(p_jup_ssb)
+        y0.extend(v_jup_ssb)
+        gms.append(self.GM['jupiter'])
+        
+        # 2b. Moons (SSB)
+        # Order: Io, Europa, Ganymede, Callisto
+        moon_names = ['io', 'europa', 'ganymede', 'callisto']
+        for name in moon_names:
+            body = self.jup_moons[name]
+            s_b = body.at(t_start) # Relative to Jup Bary? No, Relative to Kernel center?
+            # Skyfield .at() returns position relative to SSB if chained correctly?
+            # Creating 'body' from 'self.jup_moons' (loaded from jup365.bsp).
+            # Usually .at() does the lookup. But to be safe and match demo:
+            # We chain: Jup Bary -> Moon (from kernel).
+            # Wait, `body.at(t)` computes position relative to Solar System Barycenter IF `body` is linked to it.
+            # But `self.jup_moons` is just a file.
+            # `self.jup_moons['io']` is a target.
+            # `(self.jup_moons['io'] - self.planets['jupiter barycenter']).at(t)` ? No.
+            # In demo we did: `p_b_ssb = p_jb_ssb + s_b_jb.position.km` provided `s_b_jb` is relative to Jup Bary?
+            # Let's use the robust `(body - SSB).at(t)` if possible, but we don't have SSB object handy?
+            # Actually `self.planets` (de440s) has SSB? Usually segment 0.
+            # Let's stick to the manual chaining from the demo which we verified.
             
-        # 1. Pre-calculate Body Positions (Splines)
-        # We need to cover the full duration
-        t_eval_steps = int(duration / cache_step) + 2 
-        t_eval_seconds = np.linspace(0, duration + cache_step, t_eval_steps)
-        
-        t_list = [dt_obj + timedelta(seconds=s) for s in t_eval_seconds]
-        ts_objects = self.ts.from_datetimes(t_list)
-        
-        body_splines = {}
-        
-        # Moons
-        for name, body in self.moons.items():
-            vectors = (body - self.jupiter).at(ts_objects).position.km
-            body_splines[name] = CubicSpline(t_eval_seconds, vectors, axis=1)
+            # Moon relative to Jup Barycenter (default for jup365)
+            s_b_jb = body.at(t_start) 
+            p_b_ssb = p_jb + s_b_jb.position.km
+            v_b_ssb = v_jb + s_b_jb.velocity.km_per_s
             
-        # Sun
-        vectors = (self.sun - self.jupiter).at(ts_objects).position.km
-        body_splines['sun'] = CubicSpline(t_eval_seconds, vectors, axis=1)
-        
-        # 2. Define Equations of Motion
-        def equations(t, y):
-            rx, ry, rz, vx, vy, vz = y
-            r_ship = np.array([rx, ry, rz])
+            y0.extend(p_b_ssb)
+            y0.extend(v_b_ssb)
+            gms.append(self.GM[name])
             
-            # Jupiter (Central Body)
-            r_mag = np.linalg.norm(r_ship)
-            a = -self.GM['jupiter'] * r_ship / (r_mag**3)
-            
-            # Perturbations
-            for name, spline in body_splines.items():
-                r_body = spline(t)
-                r_rel = r_ship - r_body
-                dist = np.linalg.norm(r_rel)
-                
-                gm = self.GM[name] if name in self.GM else self.GM['sun']
-                
-                a_direct = -gm * r_rel / (dist**3)
-                a_indirect = -gm * r_body / (np.linalg.norm(r_body)**3)
-                a += (a_direct - a_indirect)
-                
-            return [vx, vy, vz, a[0], a[1], a[2]]
-
-        # 3. Integrate
-        y0 = np.array(state_vector)
-        t_span = (0, duration)
+        # 2c. Sun (SSB)
+        sun = self.planets['sun']
+        s_sun = sun.at(t_start) # Rel to SSB (de440s)
+        y0.extend(s_sun.position.km)
+        y0.extend(s_sun.velocity.km_per_s)
+        gms.append(self.GM['sun'])
         
-        sol = solve_ivp(equations, t_span, y0, method='RK45', t_eval=t_eval, rtol=1e-6, atol=1e-9)
+        # 2d. Ship (SSB)
+        # Input `state_vector` is Jovicentric (Relative to Jupiter Center).
+        # Ship_SSB = Jup_SSB + Ship_ICRS
+        p_ship_jup = np.array(state_vector[0:3])
+        v_ship_jup = np.array(state_vector[3:6])
         
+        p_ship_ssb = p_jup_ssb + p_ship_jup
+        v_ship_ssb = v_jup_ssb + v_ship_jup
+        
+        y0.extend(p_ship_ssb)
+        y0.extend(v_ship_ssb)
+        gms.append(0.0) # Massless ship
+        
+        # 3. Setup Integrator
+        # Ensure floats
+        y0 = [float(x) for x in y0]
+        gms = [float(x) for x in gms]
+        
+        sys = hy.model.nbody(len(gms), masses=gms)
+        ta = hy.taylor_adaptive(sys, y0, order=order) # Use kwargs compatible order
+        
+        # 4. Propagate
         if t_eval is not None:
-            return sol.y.T.tolist() # Return list of states
+            # Propagate to specific points
+            grid = np.array(t_eval, dtype=np.float64)
+            # Ensure strictly increasing and starting >= 0
+            if grid[0] < 0:
+                 raise ValueError("t_eval must be >= 0")
+                 
+            # propagate_grid returns (times, data)
+            # data shape: (N_points, N_vars)
+            res = ta.propagate_grid(grid)
+            data = res[5] # Index 5 based on debug findings
+            
+            # Convert back to Jovicentric
+            # Data structure: [Jup(6), Moons(4*6), Sun(6), Ship(6)]
+            # Ship is last 6 columns. Jup is first 6.
+            # Ship_Jup = Ship_SSB - Jup_SSB
+            
+            # Extract Jup and Ship states from all time steps
+            jup_cols = slice(0, 6)
+            ship_cols = slice(-6, None)
+            
+            jup_states = data[:, jup_cols]
+            ship_states = data[:, ship_cols]
+            
+            rel_states = ship_states - jup_states
+            return rel_states.tolist()
+            
         else:
-            return sol.y[:, -1].tolist() # Return final state
-
-    def propagate_jit(self, state_vector, time_iso, duration, dt=10.0, cache_step=600, t_eval=None):
-        """
-        JIT-compiled propagation using Numba.
-        
-        Args:
-            state_vector: Initial state [x, y, z, vx, vy, vz]
-            time_iso: Start time in ISO format
-            duration: Duration in seconds
-            dt: Integration step size (seconds). Fixed step RK4.
-            cache_step: Step size for caching body positions (seconds)
-            t_eval: Optional list of time points (seconds from start) to evaluate at.
-        """
-        import numba_engine
-        from scipy.interpolate import CubicSpline
-        from datetime import datetime, timezone, timedelta
-        
-        # Parse start time
-        if time_iso.endswith('Z'):
-            time_iso = time_iso[:-1] + '+00:00'
-        dt_obj = datetime.fromisoformat(time_iso)
-        if dt_obj.tzinfo is None:
-            dt_obj = dt_obj.replace(tzinfo=timezone.utc)
+            # Propagate to final time
+            ta.propagate_until(float(duration))
             
-        # 1. Pre-calculate Body Positions (Splines)
-        t_eval_steps = int(duration / cache_step) + 2 
-        t_eval_seconds = np.linspace(0, duration + cache_step, t_eval_steps)
-        
-        t_list = [dt_obj + timedelta(seconds=s) for s in t_eval_seconds]
-        ts_objects = self.ts.from_datetimes(t_list)
-        
-        # Prepare arrays for Numba
-        # Spline knots (shared)
-        spline_x = np.ascontiguousarray(t_eval_seconds)
-        
-        # Sun Spline
-        vectors_sun = (self.sun - self.jupiter).at(ts_objects).position.km
-        spline_sun = CubicSpline(t_eval_seconds, vectors_sun, axis=1)
-        spline_c_sun = np.ascontiguousarray(spline_sun.c) # (4, n_int, 3)
-        
-        # Moons Splines
-        # We need to stack coefficients: (N_moons, 4, n_int, 3)
-        moon_names = list(self.moons.keys())
-        n_moons = len(moon_names)
-        n_int = spline_c_sun.shape[1]
-        
-        spline_c_moons = np.empty((n_moons, 4, n_int, 3), dtype=np.float64)
-        gm_moons = np.empty(n_moons, dtype=np.float64)
-        
-        for i, name in enumerate(moon_names):
-            vectors = (self.moons[name] - self.jupiter).at(ts_objects).position.km
-            spline = CubicSpline(t_eval_seconds, vectors, axis=1)
-            spline_c_moons[i] = spline.c
-            gm_moons[i] = self.GM[name]
+            # Extract final state from integrator
+            # ta.state is current state vector
+            final_y = ta.state
             
-        spline_c_moons = np.ascontiguousarray(spline_c_moons)
-        
-        # 2. Call Numba Propagator
-        state_0 = np.array(state_vector, dtype=np.float64)
-        
-        t_eval_arr = None
-        if t_eval is not None:
-            t_eval_arr = np.ascontiguousarray(t_eval, dtype=np.float64)
+            # Extract Jup (0-6) and Ship (last 6)
+            p_jup = final_y[0:3]
+            v_jup = final_y[3:6]
             
-        res = numba_engine.propagate_numba_loop(
-            state_0, 0.0, duration, dt,
-            self.GM['jupiter'], self.GM['sun'], gm_moons,
-            spline_x, spline_c_sun, spline_c_moons,
-            t_eval=t_eval_arr
-        )
-        
-        if t_eval is not None:
-            return res.tolist()
-        else:
-            return res[0].tolist()
+            p_ship = final_y[-6:-3]
+            v_ship = final_y[-3:]
+            
+            # Relative
+            p_rel = np.array(p_ship) - np.array(p_jup)
+            v_rel = np.array(v_ship) - np.array(v_jup)
+            
+            return np.concatenate([p_rel, v_rel]).tolist()
