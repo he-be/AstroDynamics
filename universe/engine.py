@@ -1,7 +1,7 @@
 import os
 import numpy as np
 from skyfield.api import Loader, Topos
-from scipy.integrate import solve_ivp
+
 
 class PhysicsEngine:
     def __init__(self, data_dir='./data'):
@@ -71,109 +71,17 @@ class PhysicsEngine:
         
         return pos, vel
 
-    def propagate(self, state_vector, time_iso, dt):
+    def propagate(self, state_vector, time_iso, duration, t_eval=None, order=20):
         """
-        Propagate state vector (x,y,z,vx,vy,vz) in Jovicentric frame.
-        state_vector: list or np.array of 6 floats
-        time_iso: Start time string
-        dt: Duration in seconds
-        """
-        from datetime import datetime, timezone
-        if time_iso.endswith('Z'):
-            time_iso = time_iso[:-1] + '+00:00'
-        dt_obj = datetime.fromisoformat(time_iso)
-        if dt_obj.tzinfo is None:
-            dt_obj = dt_obj.replace(tzinfo=timezone.utc)
-        t_start = self.ts.from_datetime(dt_obj)
-        y0 = np.array(state_vector)
-        
-        # Time span for integration
-        t_span = (0, dt)
-        
-        # Pre-calculate body positions? 
-        # For N-Body, bodies move. We need their position at t_start + t.
-        # Calling Skyfield inside the integrator loop is slow (Python overhead).
-        # Optimization: For short durations (hours), we could assume linear motion or quadratic?
-        # NO, for "Hard SF" we want precision. We will call Skyfield. 
-        # To optimize, we can cache the positions of moons at t_start and t_end and interpolate, 
-        # but let's try direct call first.
-        
-        def equations_of_motion(t, y):
-            # t is seconds from t_start
-            current_time = t_start + (t / 86400.0) # Add days
-            
-            rx, ry, rz, vx, vy, vz = y
-            r_ship = np.array([rx, ry, rz])
-            
-            # Acceleration due to Jupiter (Central Body)
-            r_mag = np.linalg.norm(r_ship)
-            a = -self.GM['jupiter'] * r_ship / (r_mag**3)
-            
-            # Perturbations from Moons and Sun
-            # We need positions of Moons relative to Jupiter at current_time
-            # Note: This is the bottleneck.
-            
-            # Optimization: We can query all at once? No.
-            # Let's just do it.
-            
-            for name, moon_obj in self.moons.items():
-                # Position of Moon relative to Jupiter
-                r_moon = (moon_obj - self.jupiter).at(current_time).position.km
-                
-                # Vector from Moon to Ship
-                r_moon_ship = r_ship - r_moon
-                dist_moon_ship = np.linalg.norm(r_moon_ship)
-                
-                # Acceleration from Moon
-                # Direct term: -GM * (r - r_moon) / |r - r_moon|^3
-                # Indirect term (because frame is centered on Jupiter, which is also pulled by moons): 
-                # -GM * r_moon / |r_moon|^3
-                # (Encke's method logic or simply Non-Inertial frame correction)
-                # Wait, Jovicentric frame is NON-INERTIAL because Jupiter is accelerating due to Sun/Moons.
-                # However, for simulation simplicity, if we treat Jupiter as "fixed" origin, we miss the indirect term.
-                # Correct N-Body in relative frame: a_rel = a_abs_ship - a_abs_jup
-                
-                gm = self.GM[name]
-                a_direct = -gm * r_moon_ship / (dist_moon_ship**3)
-                a_indirect = -gm * r_moon / (np.linalg.norm(r_moon)**3)
-                
-                a += (a_direct - a_indirect)
-                
-            # Sun perturbation
-            r_sun = (self.sun - self.jupiter).at(current_time).position.km
-            r_sun_ship = r_ship - r_sun
-            dist_sun_ship = np.linalg.norm(r_sun_ship)
-            gm_sun = self.GM['sun']
-            
-            a_direct = -gm_sun * r_sun_ship / (dist_sun_ship**3)
-            a_indirect = -gm_sun * r_sun / (np.linalg.norm(r_sun)**3)
-            a += (a_direct - a_indirect)
-
-            return [vx, vy, vz, a[0], a[1], a[2]]
-
-        sol = solve_ivp(
-            equations_of_motion, 
-            t_span, 
-            y0, 
-            method='RK45', 
-            rtol=1e-6, 
-            atol=1e-9
-        )
-        
-        final_state = sol.y[:, -1]
-        return final_state.tolist()
-
-    def propagate_heyoka(self, state_vector, time_iso, duration, t_eval=None, order=20):
-        """
-        Fast High-Precision propagation using Heyoka (Taylor Series Integrator).
-        Requires 'heyoka.py' installed (e.g. in Conda environment).
+        Propagate state vector using Heyoka (Taylor Series Integrator).
+        This is the primary propagation method.
         
         Args:
             state_vector: Initial state [x, y, z, vx, vy, vz] (Jovicentric frame)
             time_iso: Start time in ISO format
             duration: Duration in seconds
             t_eval: Optional list of time points (seconds from start) to evaluate at.
-            order: Taylor series order (default 20). Lower (e.g. 10) for faster compilation.
+            order: Taylor series order (default 20).
             
         Returns:
             Final state vector (list) or list of state vectors if t_eval is provided.
@@ -181,7 +89,7 @@ class PhysicsEngine:
         try:
             import heyoka as hy
         except ImportError:
-            raise ImportError("Heyoka not found. Please install 'heyoka.py' in your environment (see docs/environment_setup.md).")
+            raise ImportError("Heyoka not found. Please install 'heyoka.py' in your environment.")
             
         from datetime import datetime, timezone
         
@@ -225,21 +133,6 @@ class PhysicsEngine:
         moon_names = ['io', 'europa', 'ganymede', 'callisto']
         for name in moon_names:
             body = self.jup_moons[name]
-            s_b = body.at(t_start) # Relative to Jup Bary? No, Relative to Kernel center?
-            # Skyfield .at() returns position relative to SSB if chained correctly?
-            # Creating 'body' from 'self.jup_moons' (loaded from jup365.bsp).
-            # Usually .at() does the lookup. But to be safe and match demo:
-            # We chain: Jup Bary -> Moon (from kernel).
-            # Wait, `body.at(t)` computes position relative to Solar System Barycenter IF `body` is linked to it.
-            # But `self.jup_moons` is just a file.
-            # `self.jup_moons['io']` is a target.
-            # `(self.jup_moons['io'] - self.planets['jupiter barycenter']).at(t)` ? No.
-            # In demo we did: `p_b_ssb = p_jb_ssb + s_b_jb.position.km` provided `s_b_jb` is relative to Jup Bary?
-            # Let's use the robust `(body - SSB).at(t)` if possible, but we don't have SSB object handy?
-            # Actually `self.planets` (de440s) has SSB? Usually segment 0.
-            # Let's stick to the manual chaining from the demo which we verified.
-            
-            # Moon relative to Jup Barycenter (default for jup365)
             s_b_jb = body.at(t_start) 
             p_b_ssb = p_jb + s_b_jb.position.km
             v_b_ssb = v_jb + s_b_jb.velocity.km_per_s
