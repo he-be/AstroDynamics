@@ -238,3 +238,78 @@ class PhysicsEngine:
             return sol.y.T.tolist() # Return list of states
         else:
             return sol.y[:, -1].tolist() # Return final state
+
+    def propagate_jit(self, state_vector, time_iso, duration, dt=10.0, cache_step=600, t_eval=None):
+        """
+        JIT-compiled propagation using Numba.
+        
+        Args:
+            state_vector: Initial state [x, y, z, vx, vy, vz]
+            time_iso: Start time in ISO format
+            duration: Duration in seconds
+            dt: Integration step size (seconds). Fixed step RK4.
+            cache_step: Step size for caching body positions (seconds)
+            t_eval: Optional list of time points (seconds from start) to evaluate at.
+        """
+        import numba_engine
+        from scipy.interpolate import CubicSpline
+        from datetime import datetime, timezone, timedelta
+        
+        # Parse start time
+        if time_iso.endswith('Z'):
+            time_iso = time_iso[:-1] + '+00:00'
+        dt_obj = datetime.fromisoformat(time_iso)
+        if dt_obj.tzinfo is None:
+            dt_obj = dt_obj.replace(tzinfo=timezone.utc)
+            
+        # 1. Pre-calculate Body Positions (Splines)
+        t_eval_steps = int(duration / cache_step) + 2 
+        t_eval_seconds = np.linspace(0, duration + cache_step, t_eval_steps)
+        
+        t_list = [dt_obj + timedelta(seconds=s) for s in t_eval_seconds]
+        ts_objects = self.ts.from_datetimes(t_list)
+        
+        # Prepare arrays for Numba
+        # Spline knots (shared)
+        spline_x = np.ascontiguousarray(t_eval_seconds)
+        
+        # Sun Spline
+        vectors_sun = (self.sun - self.jupiter).at(ts_objects).position.km
+        spline_sun = CubicSpline(t_eval_seconds, vectors_sun, axis=1)
+        spline_c_sun = np.ascontiguousarray(spline_sun.c) # (4, n_int, 3)
+        
+        # Moons Splines
+        # We need to stack coefficients: (N_moons, 4, n_int, 3)
+        moon_names = list(self.moons.keys())
+        n_moons = len(moon_names)
+        n_int = spline_c_sun.shape[1]
+        
+        spline_c_moons = np.empty((n_moons, 4, n_int, 3), dtype=np.float64)
+        gm_moons = np.empty(n_moons, dtype=np.float64)
+        
+        for i, name in enumerate(moon_names):
+            vectors = (self.moons[name] - self.jupiter).at(ts_objects).position.km
+            spline = CubicSpline(t_eval_seconds, vectors, axis=1)
+            spline_c_moons[i] = spline.c
+            gm_moons[i] = self.GM[name]
+            
+        spline_c_moons = np.ascontiguousarray(spline_c_moons)
+        
+        # 2. Call Numba Propagator
+        state_0 = np.array(state_vector, dtype=np.float64)
+        
+        t_eval_arr = None
+        if t_eval is not None:
+            t_eval_arr = np.ascontiguousarray(t_eval, dtype=np.float64)
+            
+        res = numba_engine.propagate_numba_loop(
+            state_0, 0.0, duration, dt,
+            self.GM['jupiter'], self.GM['sun'], gm_moons,
+            spline_x, spline_c_sun, spline_c_moons,
+            t_eval=t_eval_arr
+        )
+        
+        if t_eval is not None:
+            return res.tolist()
+        else:
+            return res[0].tolist()
