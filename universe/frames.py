@@ -1,0 +1,110 @@
+import numpy as np
+
+class FrameManager:
+    def __init__(self, engine):
+        self.engine = engine
+        
+    def transform_to_rotating(self, state_inertial, time_iso, center_body, secondary_body):
+        """
+        Transform state from Jovicentric Inertial (ICRS) to Synodic Rotating Frame.
+        
+        Frame Definition:
+        - Center: center_body (e.g. Jupiter)
+        - X-axis: Points from center_body to secondary_body (e.g. Ganymede)
+        - Z-axis: Parallel to orbital angular momentum of secondary
+        - Y-axis: Completes right-handed system (roughly along velocity)
+        
+        Args:
+            state_inertial: [x,y,z,vx,vy,vz] relative to center_body (Inertial).
+            time_iso: Time string.
+            center_body: Name of primary (e.g. 'jupiter')
+            secondary_body: Name of secondary (e.g. 'ganymede')
+            
+        Returns:
+            state_rot: [x,y,z,vx,vy,vz] in Rotating Frame.
+        """
+        # 1. Get States
+        # Note: engine.get_body_state returns Jovicentric state?
+        # Yes, get_body_state returns relative to Jupiter Center?
+        # Let's verify Engine API.
+        # "get_body_state ... returns state relative to SSB? or Jupiter?"
+        # engine.get_body_state docstring says: "Returns ... relative to Jupiter Center (if body_name != jupiter)?"
+        # Wait, if center_body is 'jupiter', engine.get_body_state('ganymede') gives Jovicentric.
+        # If center_body is NOT jupiter, we might need manual subtraction.
+        # Let's assume standard usage: center='jupiter', secondary='ganymede'.
+        
+        # Primary State (usually [0,0,0] if center='jupiter')
+        if center_body == 'jupiter':
+            p_pri = np.zeros(3)
+            v_pri = np.zeros(3)
+        else:
+            p_pri_full, v_pri_full = self.engine.get_body_state(center_body, time_iso)
+            p_pri = np.array(p_pri_full)
+            v_pri = np.array(v_pri_full)
+            
+        # Secondary State
+        p_sec_full, v_sec_full = self.engine.get_body_state(secondary_body, time_iso)
+        p_sec = np.array(p_sec_full)
+        v_sec = np.array(v_sec_full)
+        
+        # Relative Secondary State (r_vec, v_vec)
+        r_sec = p_sec - p_pri
+        v_sec = v_sec - v_pri
+        
+        # 2. Define Axes
+        r_mag = np.linalg.norm(r_sec)
+        x_hat = r_sec / r_mag
+        
+        h_vec = np.cross(r_sec, v_sec)
+        h_mag = np.linalg.norm(h_vec)
+        z_hat = h_vec / h_mag
+        
+        y_hat = np.cross(z_hat, x_hat)
+        
+        # Rotation Matrix (Inertial -> Rotating)
+        # Row 0: x_hat
+        # Row 1: y_hat
+        # Row 2: z_hat
+        R = np.array([x_hat, y_hat, z_hat])
+        
+        # 3. Transform Position
+        # Input State (relative to Center Body already?)
+        # Argument says "state_inertial ... relative to center_body".
+        # So input is [rx, ...].
+        p_in = np.array(state_inertial[0:3])
+        v_in = np.array(state_inertial[3:6])
+        
+        p_rot = R @ p_in
+        
+        # 4. Transform Velocity
+        # v_rot = R @ v_in - omega x p_rot
+        # Calculate angular velocity vector omega
+        # omega = (r x v) / r^2 ? No.
+        # omega vector direction is z_hat.
+        # Magnitude w = h / r^2 (for circular).
+        # General: omega = (r x v) / r^2 ??
+        # Instantaneous angular velocity of the frame (defined by r).
+        # The frame X-axis tracks r.
+        # Rotation rate of r vector is |v_perp| / r.
+        # v_perp = v - dot(v, x_hat)*x_hat.
+        # w = |v_perp| / r.
+        # Direction is z_hat (mostly).
+        # Actually simplest: omega_vec_inertial = cross(r, v) / r^2.
+        # Wait, cross(r, v) is h.
+        # So omega = h / r^2.
+        omega_vec_inertial = h_vec / (r_mag**2)
+        
+        # Transform omega to rotating frame?
+        # omega_rot = R @ omega_vec_inertial
+        # Should be [0, 0, w].
+        omega_rot = R @ omega_vec_inertial
+        
+        # Coriolis term
+        # v_rotating = v_in_rot - cross(omega_rot, p_rot)
+        # where v_in_rot = R @ v_in
+        v_in_rot = R @ v_in
+        transport_vel = np.cross(omega_rot, p_rot)
+        
+        v_rot = v_in_rot - transport_vel
+        
+        return np.concatenate([p_rot, v_rot]).tolist()
