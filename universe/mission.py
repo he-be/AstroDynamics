@@ -1,0 +1,122 @@
+import numpy as np
+from datetime import datetime, timedelta
+from planning import solve_lambert
+
+class MissionPlanner:
+    def __init__(self, engine):
+        self.engine = engine
+        self.mu = engine.GM['jupiter'] # Default to Jupiter context
+
+    def calculate_transfer(self, r_start, r_target, dt, mu=None):
+        """
+        Solves Lambert problem to find required Departure and Arrival velocities.
+        
+        Args:
+            r_start: Position vector (km)
+            r_target: Position vector (km)
+            dt: Time of flight (seconds)
+            mu: Gravitational parameter (km^3/s^2). Defaults to Jupiter.
+            
+        Returns:
+            v_dep_vec (km/s), v_arr_vec (km/s)
+        """
+        if mu is None: mu = self.mu
+        
+        # solve_lambert returns v_dep_vec, v_arr_vec
+        v_dep, v_arr_transfer = solve_lambert(r_start, r_target, dt, mu)
+        return v_dep, v_arr_transfer
+
+    def verify_fuel(self, total_dv_km_s, mass, isp):
+        """
+        Verify if fuel is sufficient for Total Delta V.
+        Args:
+            total_dv_km_s: Delta V in km/s.
+            mass: Wet mass (kg).
+            isp: Specific Impulse (s).
+        Returns:
+            (is_ok, fuel_consumed_kg)
+        """
+        g0 = 9.80665
+        # Convert km/s to m/s
+        dv_meters = total_dv_km_s * 1000.0
+        mass_final = mass * np.exp(-dv_meters / (isp * g0))
+        return mass_final > 0, mass - mass_final
+
+class FlightController:
+    def __init__(self, engine):
+        self.engine = engine
+        self.state = None # [rx,ry,rz, vx,vy,vz] in Jovicentric frame
+        self.mass = None
+        self.time_iso = None
+        self.trajectory_log = [] # List of [x,y,z]
+
+    def set_initial_state(self, state, mass, time_iso):
+        self.state = state
+        self.mass = mass
+        self.time_iso = time_iso
+        self.trajectory_log.append(state[:3])
+
+    def execute_burn(self, plan_dv_vec_km_s, thrust_force, isp, label="Burn"):
+        """
+        Executes a finite burn matching the requested Delta V vector (km/s).
+        """
+        dv_mag_km = np.linalg.norm(plan_dv_vec_km_s)
+        if dv_mag_km < 1e-9:
+            # print(f"[{label}] Delta V negligible. Skipping.")
+            return
+
+        # Calculate Duration (Tsiolkovsky)
+        # t = m_in * ve * (1 - exp(-dv/ve)) / F
+        g0 = 9.80665
+        ve = isp * g0 # m/s
+        dv_meters = dv_mag_km * 1000.0
+        
+        m_in = self.mass
+        duration = (m_in * ve * (1 - np.exp(-dv_meters/ve))) / thrust_force
+        
+        print(f"[{label}] Executing DV={dv_meters:.2f} m/s. Duration={duration:.2f} s.")
+        
+        # Thrust Vector Direction
+        thrust_dir = plan_dv_vec_km_s / dv_mag_km
+        thrust_vec = thrust_dir * thrust_force
+        
+        # Execute via Engine
+        state_new, mass_new = self.engine.propagate_controlled(
+            self.state, self.time_iso, duration,
+            thrust_vector=thrust_vec.tolist(),
+            mass=self.mass,
+            isp=isp
+        )
+        
+        # Update Internal State
+        self.state = state_new
+        self.mass = mass_new
+        self.update_time(duration)
+        self.trajectory_log.append(self.state[:3])
+        
+    def coast(self, duration, step_points=100):
+        # print(f"[Coast] Drifting for {duration:.1f} s...")
+        if duration <= 1e-3: return
+
+        t_eval = np.linspace(0, duration, step_points)
+        
+        states = self.engine.propagate(
+            self.state, self.time_iso, duration, t_eval=t_eval
+        )
+        
+        for s in states:
+            self.trajectory_log.append(s[:3])
+            
+        self.state = states[-1]
+        self.update_time(duration)
+
+    def update_time(self, seconds_added):
+        dt_obj = datetime.fromisoformat(self.time_iso.replace('Z', '+00:00'))
+        dt_obj += timedelta(seconds=seconds_added)
+        self.time_iso = dt_obj.isoformat().replace('+00:00', 'Z')
+        
+    def get_position(self):
+        return np.array(self.state[:3])
+    
+    def get_velocity(self):
+        return np.array(self.state[3:6])
