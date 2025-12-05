@@ -42,6 +42,7 @@ class PhysicsEngine:
         
         # Heyoka Integrator Cache
         self.ta = None
+        self.ta_controlled = None
 
     def get_body_state(self, body_name: str, time_iso: str):
         """
@@ -229,3 +230,136 @@ class PhysicsEngine:
             v_rel = np.array(v_ship) - np.array(v_jup)
             
             return np.concatenate([p_rel, v_rel]).tolist()
+
+    def propagate_controlled(self, state_vector, time_iso, duration, thrust_vector, mass, isp):
+        """
+        Propagate with Finite Burn (Constant Thrust).
+        
+        Args:
+            state_vector: [x,y,z,vx,vy,vz] (Jovicentric).
+            time_iso: Start Time.
+            duration: Burn duration (s).
+            thrust_vector: [Fx, Fy, Fz] in Newtons (Inertial Frame).
+            mass: Initial Mass (kg).
+            isp: Specific Impulse (s).
+            
+        Returns:
+            (final_state_vector, final_mass)
+        """
+        try:
+            import heyoka as hy
+        except ImportError:
+            raise ImportError("Heyoka not found.")
+            
+        from datetime import datetime, timezone
+        
+        # 1. Parse Time & State (Same as propagate)
+        if time_iso.endswith('Z'): time_iso = time_iso[:-1] + '+00:00'
+        dt_obj = datetime.fromisoformat(time_iso)
+        if dt_obj.tzinfo is None: dt_obj = dt_obj.replace(tzinfo=timezone.utc)
+        t_start = self.ts.from_datetime(dt_obj)
+        
+        y0 = []
+        gms = []
+        
+        # Bodies setup (Jupiter, Moons, Sun, Ship)
+        # Note: Code duplication with propagate(). Could refactor, but for now inline for clarity.
+        
+        # Jup Bary
+        jb = self.planets['jupiter barycenter'].at(t_start)
+        p_jb, v_jb = jb.position.km, jb.velocity.km_per_s
+        # Jup Center
+        jc = self.jup_moons['jupiter'].at(t_start)
+        p_jc, v_jc = jc.position.km, jc.velocity.km_per_s
+        
+        p_jup_ssb = p_jb + p_jc
+        v_jup_ssb = v_jb + v_jc
+        
+        y0.extend(p_jup_ssb); y0.extend(v_jup_ssb); gms.append(self.GM['jupiter'])
+        
+        for name in ['io', 'europa', 'ganymede', 'callisto']:
+            b = self.jup_moons[name].at(t_start)
+            y0.extend(p_jb + b.position.km)
+            y0.extend(v_jb + b.velocity.km_per_s)
+            gms.append(self.GM[name])
+            
+        sun = self.planets['sun'].at(t_start)
+        y0.extend(sun.position.km); y0.extend(sun.velocity.km_per_s); gms.append(self.GM['sun'])
+        
+        # Ship
+        p_s_j = np.array(state_vector[0:3])
+        v_s_j = np.array(state_vector[3:6])
+        y0.extend(p_jup_ssb + p_s_j)
+        y0.extend(v_jup_ssb + v_s_j)
+        gms.append(0.0)
+        
+        # Add Initial Mass to State
+        y0.append(float(mass))
+        y0 = [float(x) for x in y0]
+        gms = [float(x) for x in gms]
+        
+        # 2. Setup/Reuse Controlled Integrator
+        if self.ta_controlled is None:
+            import sys; sys.setrecursionlimit(10000)
+            
+            # Base N-Body System
+            sys_eq = hy.model.nbody(len(gms), masses=gms)
+            
+            # Define Parameters and Variables
+            # Use heyoka.par[index] for runtime parameters
+            tx = hy.par[0]
+            ty = hy.par[1]
+            tz = hy.par[2]
+            m_dot = hy.par[3]
+            m_ship = hy.make_vars("m_ship") # Mass variable (State)
+            
+            # Modify Ship Acceleration (Index 6)
+            # Indices in sys_eq: 6*6 + 3,4,5 = 39, 40, 41
+            # sys_eq[39] is (vx, ax). We want new_ax = ax + tx/(m*1000)
+            # Divide by 1000 to convert m/s^2 to km/s^2
+            
+            for i, param_force in zip([39, 40, 41], [tx, ty, tz]):
+                var, expr = sys_eq[i]
+                new_expr = expr + (param_force / (m_ship * 1000.0))
+                sys_eq[i] = (var, new_expr)
+                
+            # Add Mass Equation: dm/dt = -m_dot
+            sys_eq.append((m_ship, -m_dot))
+            
+            self.ta_controlled = hy.taylor_adaptive(sys_eq, y0)
+            
+        # 3. Update Parameters & State
+        # Calculate Flow Rate
+        thrust_mag = np.linalg.norm(thrust_vector)
+        g0 = 9.80665
+        flow_rate = thrust_mag / (isp * g0)
+
+        # Update Params: [tx, ty, tz, m_dot]
+        self.ta_controlled.pars[:] = [thrust_vector[0], thrust_vector[1], thrust_vector[2], flow_rate]
+        
+        # Update State
+        self.ta_controlled.time = 0.0
+        self.ta_controlled.state[:] = y0
+        
+        # 4. Propagate
+        self.ta_controlled.propagate_until(float(duration))
+        
+        # 5. Extract Result
+        final = self.ta_controlled.state
+        
+        # Ship: Indices 36-42 (pos, vel). Mass is last (42).
+        # Jup: 0-6.
+        # Relative State
+        p_jup = final[0:3]
+        v_jup = final[3:6]
+        
+        p_ship = final[-7:-4] # x,y,z of ship (before mass)
+        v_ship = final[-4:-1] # vx,vy,vz of ship
+        final_mass = final[-1] # last element is mass
+        
+        p_rel = np.array(p_ship) - np.array(p_jup)
+        v_rel = np.array(v_ship) - np.array(v_jup)
+        
+        final_state = np.concatenate([p_rel, v_rel]).tolist()
+        
+        return final_state, float(final_mass)
