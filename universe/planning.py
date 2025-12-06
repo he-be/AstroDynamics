@@ -20,7 +20,69 @@ def stumpff_s(z):
     else:
         return 1.0 / 6.0
 
-def solve_lambert(r1, r2, dt, mu, tm=1):
+
+def kepler_to_cartesian(a, e, i_rad, Omega_rad, omega_rad, nu_rad, mu):
+    """
+    Convert Keplerian elements to Cartesian State Vectors.
+    
+    Args:
+        a: Semi-major axis (km)
+        e: Eccentricity
+        i_rad: Inclination (radians)
+        Omega_rad: Longitude of Ascending Node (radians)
+        omega_rad: Argument of Periapsis (radians)
+        nu_rad: True Anomaly (radians)
+        mu: Gravitational parameter
+        
+    Returns:
+        r_vec, v_vec (numpy arrays)
+    """
+    # 1. Position/Velocity in Perifocal Frame
+    p = a * (1 - e**2)
+    r = p / (1 + e * np.cos(nu_rad))
+    
+    # Perifocal coordinates
+    # r_orbit = [r cos(nu), r sin(nu), 0]
+    # v_orbit = sqrt(mu/p) * [-sin(nu), e + cos(nu), 0]
+    
+    x_orbit = r * np.cos(nu_rad)
+    y_orbit = r * np.sin(nu_rad)
+    
+    vx_orbit = np.sqrt(mu/p) * (-np.sin(nu_rad))
+    vy_orbit = np.sqrt(mu/p) * (e + np.cos(nu_rad))
+    
+    r_perifocal = np.array([x_orbit, y_orbit, 0.0])
+    v_perifocal = np.array([vx_orbit, vy_orbit, 0.0])
+    
+    # 2. Rotation Matrix to Inertial
+    # R3(-Omega) * R1(-i) * R3(-omega)
+    # Actually just standard rotation matrix R_perifocal_to_inertial
+    
+    cO = np.cos(Omega_rad)
+    sO = np.sin(Omega_rad)
+    cw = np.cos(omega_rad)
+    sw = np.sin(omega_rad)
+    ci = np.cos(i_rad)
+    si = np.sin(i_rad)
+    
+    # R = [ [cO cw - sO sw ci, -cO sw - sO cw ci,  sO si],
+    #       [sO cw + cO sw ci, -sO sw + cO cw ci, -cO si],
+    #       [sw si,             cw si,             ci   ] ]
+    # Wait, simple matrix multiplication of rotations:
+    # R = Rz(Omega) @ Rx(i) @ Rz(omega)
+    
+    Rz_W = np.array([[cO, -sO, 0], [sO, cO, 0], [0, 0, 1]])
+    Rx_i = np.array([[1, 0, 0], [0, ci, -si], [0, si, ci]])
+    Rz_w = np.array([[cw, -sw, 0], [sw, cw, 0], [0, 0, 1]])
+    
+    R = Rz_W @ Rx_i @ Rz_w
+    
+    r_vec = R @ r_perifocal
+    v_vec = R @ v_perifocal
+    
+    return r_vec, v_vec
+
+def solve_lambert(r1, r2, dt, mu, cw=False, max_revs=0):
     """
     Solve Lambert's problem using Universal Variables (Bate, Mueller, White).
     
@@ -35,6 +97,8 @@ def solve_lambert(r1, r2, dt, mu, tm=1):
         v1: Velocity vector at r1
         v2: Velocity vector at r2
     """
+    tm = -1 if cw else 1
+    
     r1_mag = np.linalg.norm(r1)
     r2_mag = np.linalg.norm(r2)
     
@@ -50,26 +114,11 @@ def solve_lambert(r1, r2, dt, mu, tm=1):
         
     # Calculate delta nu (transfer angle)
     # cos(dnu) = dot / (r1 r2)
-    # sin(dnu) defined by direction?
-    # Using cross product to determine sign if planar?
-    # Assume Prograde/Short way if tm=1?
     
     # Simple calculation of dnu:
-    dnu = np.arccos(dot_prod / (r1_mag * r2_mag))
+    dnu = np.arccos(np.clip(dot_prod / (r1_mag * r2_mag), -1.0, 1.0))
     
-    # Correct dnu based on tm and cross Z component?
-    # Actually standard algorithm:
-    # If tm=1 (Short way), 0 < dnu < pi.
-    # If tm=-1 (Long way), pi < dnu < 2pi.
-    
-    # Wait, usually we determine plane normal.
-    # If explicit 'tm' (direction) is given:
-    # Short way implies dnu < pi. Long way dnu > pi.
-    # arccos returns [0, pi].
-    # So if Short Way, dnu = arccos(...)
-    # If Long Way, dnu = 2pi - arccos(...)
-    
-    if tm == -1:
+    if tm == -1: # Retrograde / Long way?
         dnu = 2 * np.pi - dnu
         
     # Constants

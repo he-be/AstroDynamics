@@ -108,3 +108,65 @@ class FrameManager:
         v_rot = v_in_rot - transport_vel
         
         return np.concatenate([p_rot, v_rot]).tolist()
+
+    def get_lagrange_point(self, point_name, time_iso, center_body, secondary_body):
+        """
+        Calculate inertial state of Lagrange points (L1, L2 approximated).
+        
+        Args:
+            point_name: 'L1' or 'L2'
+            time_iso: Time ISO string.
+            center_body: Primary name.
+            secondary_body: Secondary name.
+            
+        Returns:
+            [x,y,z,vx,vy,vz] in Inertial Jovicentric frame.
+        """
+        # 1. Get Mass Ratio
+        GM_pri = self.engine.GM.get(center_body)
+        GM_sec = self.engine.GM.get(secondary_body)
+        
+        if GM_pri is None or GM_sec is None:
+            raise ValueError("Unknown body GM")
+            
+        # Alpha (Hill sphere scaler)
+        alpha = (GM_sec / (3 * GM_pri))**(1/3.0)
+        
+        # 2. Get States
+        # If center is jupiter, p_pri is 0? Use get_body_state logic
+        if center_body == 'jupiter':
+            p_pri = np.zeros(3)
+            v_pri = np.zeros(3)
+        else:
+            p_pri_full, v_pri_full = self.engine.get_body_state(center_body, time_iso)
+            p_pri = np.array(p_pri_full)
+            v_pri = np.array(v_pri_full)
+            
+        p_sec_full, v_sec_full = self.engine.get_body_state(secondary_body, time_iso)
+        p_sec = np.array(p_sec_full)
+        v_sec = np.array(v_sec_full)
+        
+        # Vectors relative to Primary
+        r_vec = p_sec - p_pri
+        v_vec = v_sec - v_pri
+        r_mag = np.linalg.norm(r_vec)
+        
+        # 3. Scale Distance
+        if point_name == 'L1':
+            scale = 1.0 - alpha
+        elif point_name == 'L2':
+            scale = 1.0 + alpha
+        else:
+            raise ValueError(f"Lagrange point {point_name} not supported yet (only L1, L2)")
+            
+        # 4. Calculate State
+        # Position: Scale radius vector
+        p_L = p_pri + r_vec * scale
+        
+        # Velocity: Scale velocity vector (Assume co-rotation)
+        # V_L_rel = V_sec_rel * scale ??
+        # For circular orbit, v = omega * r. Omega constant. So v scales with r.
+        # V_L = V_pri + (V_sec - V_pri) * scale
+        v_L = v_pri + v_vec * scale
+        
+        return np.concatenate([p_L, v_L]).tolist()

@@ -49,6 +49,7 @@ class FlightController:
         self.mass = None
         self.time_iso = None
         self.trajectory_log = [] # List of [x,y,z]
+        self.maneuver_log = [] # List of {t, dv, duration, label}
 
     def set_initial_state(self, state, mass, time_iso):
         self.state = state
@@ -74,7 +75,15 @@ class FlightController:
         m_in = self.mass
         duration = (m_in * ve * (1 - np.exp(-dv_meters/ve))) / thrust_force
         
-        print(f"[{label}] Executing DV={dv_meters:.2f} m/s. Duration={duration:.2f} s.")
+        print(f"[{label}] Executing DV={dv_meters:.2f} m/s. Duration={duration:.2f} s. Time={self.time_iso}")
+        
+        self.maneuver_log.append({
+            'time_iso': self.time_iso,
+            'delta_v_m_s': dv_meters,
+            'duration_s': duration,
+            'label': label,
+            'mass_before': m_in
+        })
         
         # Thrust Vector Direction
         thrust_dir = plan_dv_vec_km_s / dv_mag_km
