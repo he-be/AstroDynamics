@@ -6,6 +6,7 @@ import { OrbitControls, Stars } from '@react-three/drei';
 import { SolarSystem } from './visuals/SolarSystem';
 
 import { TimeController } from './components/TimeController';
+import { FrameSelector } from './components/FrameSelector';
 
 function App() {
   return (
@@ -35,6 +36,9 @@ function App() {
 
       {/* Time Controller */}
       <TimeController />
+
+      {/* Frame Selector */}
+      <FrameSelector />
     </div>
   )
 }
