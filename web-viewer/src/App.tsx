@@ -1,34 +1,36 @@
-import { useState } from 'react'
-import reactLogo from './assets/react.svg'
-import viteLogo from '/vite.svg'
 import './App.css'
 
-function App() {
-  const [count, setCount] = useState(0)
 
+import { Canvas } from '@react-three/fiber';
+import { OrbitControls, Stars } from '@react-three/drei';
+import { SolarSystem } from './visuals/SolarSystem';
+
+function App() {
   return (
-    <>
-      <div>
-        <a href="https://vite.dev" target="_blank">
-          <img src={viteLogo} className="logo" alt="Vite logo" />
-        </a>
-        <a href="https://react.dev" target="_blank">
-          <img src={reactLogo} className="logo react" alt="React logo" />
-        </a>
+    <div className="w-full h-full bg-black">
+      <Canvas camera={{ position: [0, 2000, 2000], fov: 45, far: 100000 }}>
+        <color attach="background" args={['#050510']} />
+
+        {/* Lights */}
+        <ambientLight intensity={0.1} />
+        <pointLight position={[0, 0, 0]} intensity={2.0} />
+
+        {/* Environment */}
+        <Stars radius={100} depth={50} count={5000} factor={4} saturation={0} fade speed={1} />
+
+        {/* Content */}
+        <SolarSystem />
+
+        {/* Controls */}
+        <OrbitControls makeDefault minDistance={100} maxDistance={20000} />
+      </Canvas>
+
+      {/* UI Overlay placeholder */}
+      <div className="absolute top-4 left-4 text-white font-mono pointer-events-none">
+        <h1 className="text-xl font-bold">OrbitViz</h1>
+        <div className="text-xs text-gray-400">Jovicentric Inertial Frame</div>
       </div>
-      <h1>Vite + React</h1>
-      <div className="card">
-        <button onClick={() => setCount((count) => count + 1)}>
-          count is {count}
-        </button>
-        <p>
-          Edit <code>src/App.tsx</code> and save to test HMR
-        </p>
-      </div>
-      <p className="read-the-docs">
-        Click on the Vite and React logos to learn more
-      </p>
-    </>
+    </div>
   )
 }
 
