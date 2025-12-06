@@ -5,9 +5,11 @@ import { Canvas } from '@react-three/fiber';
 import { OrbitControls, Stars } from '@react-three/drei';
 import { SolarSystem } from './visuals/SolarSystem';
 
+import { TimeController } from './components/TimeController';
+
 function App() {
   return (
-    <div className="w-full h-full bg-black">
+    <div className="w-full h-full bg-black relative">
       <Canvas camera={{ position: [0, 2000, 2000], fov: 45, far: 100000 }}>
         <color attach="background" args={['#050510']} />
 
@@ -25,11 +27,14 @@ function App() {
         <OrbitControls makeDefault minDistance={100} maxDistance={20000} />
       </Canvas>
 
-      {/* UI Overlay placeholder */}
+      {/* UI Overlay */}
       <div className="absolute top-4 left-4 text-white font-mono pointer-events-none">
         <h1 className="text-xl font-bold">OrbitViz</h1>
         <div className="text-xs text-gray-400">Jovicentric Inertial Frame</div>
       </div>
+
+      {/* Time Controller */}
+      <TimeController />
     </div>
   )
 }
