@@ -3,7 +3,8 @@ import { useMissionStore } from '../stores/useMissionStore';
 import { useTimeStore } from '../stores/useTimeStore';
 import { useEphemeris } from '../hooks/useEphemeris';
 import { Vector3 } from 'three';
-import { Line } from '@react-three/drei';
+import { Line, Html } from '@react-three/drei';
+import { useVisualizationStore } from '../stores/useVisualizationStore';
 
 const UNIT_SCALE = 0.001;
 
@@ -12,6 +13,7 @@ export const Spacecraft: React.FC = () => {
     const getInterpolatedState = useMissionStore(s => s.getInterpolatedState);
     const manifest = useMissionStore(s => s.manifest);
     const { transform } = useEphemeris();
+    const showOutlines = useVisualizationStore(s => s.showOutlines);
 
     // 1. Get Current State (Interpolated)
     const state = getInterpolatedState(currentTime);
@@ -39,6 +41,10 @@ export const Spacecraft: React.FC = () => {
 
         for (let i = 0; i < manifest.timeline.length; i += step) {
             const p = manifest.timeline[i];
+
+            // Stop drawing if point is in the future
+            if (p.time > currentTime) break;
+
             // WARNING: Trail transformation relies on the Current Time's transform.
             // If we are in Rotating Frame, the "Trail" changes shape as we play!
             // That is correct for an "Instantaneous Path" relative to the frame.
@@ -59,6 +65,11 @@ export const Spacecraft: React.FC = () => {
 
     if (!state || !renderPos) return null;
 
+    // Hide Spacecraft if it's just the default Ephemeris
+    if (manifest?.meta.missionName === 'Solar System Ephemeris') return null;
+
+
+
     return (
         <group scale={[UNIT_SCALE, UNIT_SCALE, UNIT_SCALE]}>
             <mesh position={renderPos}>
@@ -74,6 +85,22 @@ export const Spacecraft: React.FC = () => {
                     transparent
                     lineWidth={1}
                 />
+            )}
+
+            {showOutlines && (
+                <Html position={renderPos} zIndexRange={[60, 0]}>
+                    <div className="relative pointer-events-none">
+                        {/* Dot: Centered on [0,0,0] */}
+                        <div className="absolute top-0 left-0 w-1.5 h-1.5 rounded-full bg-cyan-400 shadow-[0_0_8px_rgba(0,255,255,1)]"
+                            style={{ transform: 'translate(-50%, -50%)' }} />
+
+                        {/* Label: Centered horizontally, pushed down */}
+                        <div className="absolute top-3 left-0 text-[10px] text-cyan-300 font-mono whitespace-nowrap bg-black/60 px-1 rounded backdrop-blur-sm border border-cyan-500/30"
+                            style={{ transform: 'translate(-50%, 0)' }}>
+                            Spacecraft
+                        </div>
+                    </div>
+                </Html>
             )}
         </group>
     );

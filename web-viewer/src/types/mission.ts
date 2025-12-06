@@ -22,6 +22,7 @@ export interface TrajectoryState {
     position: [number, number, number]; // [x, y, z] km
     velocity: [number, number, number]; // [vx, vy, vz] km/s
     mass: number; // kg
+    bodies?: Record<string, [number, number, number]>; // Positions of celestial bodies
 }
 
 export interface Maneuver {

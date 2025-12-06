@@ -58,11 +58,28 @@ export const useMissionStore = create<MissionStore>((set, get) => ({
         // Linear for Mass
         const mass = p0.mass + (p1.mass - p0.mass) * t;
 
+        // Interpolate Bodies
+        const bodies: Record<string, [number, number, number]> = {};
+        if (p0.bodies && p1.bodies) {
+            for (const bodyName in p0.bodies) {
+                const b0 = p0.bodies[bodyName];
+                const b1 = p1.bodies[bodyName];
+                if (b1) {
+                    bodies[bodyName] = [
+                        b0[0] + (b1[0] - b0[0]) * t,
+                        b0[1] + (b1[1] - b0[1]) * t,
+                        b0[2] + (b1[2] - b0[2]) * t
+                    ];
+                }
+            }
+        }
+
         return {
             time,
             position: pos,
             velocity: vel,
-            mass
+            mass,
+            bodies
         };
     },
 }));

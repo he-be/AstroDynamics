@@ -1,7 +1,9 @@
+
 import React, { useMemo } from 'react';
 import { Body } from './Body';
 import { useEphemeris } from '../hooks/useEphemeris';
 import { useReferenceFrameStore } from '../stores/useReferenceFrameStore';
+import { OrbitPath } from './OrbitPath';
 
 const UNIT_SCALE = 0.001;
 
@@ -11,14 +13,16 @@ export const SolarSystem: React.FC = () => {
 
     // Apply Transform to all bodies
     const renderBodies = useMemo(() => {
-        return Object.values(bodies).map(b => {
-            // 1. Translate
-            const pos = b.position.clone().add(transform.offset);
-            // 2. Rotate
-            pos.applyQuaternion(transform.rotation);
+        return Object.values(bodies)
+            .filter(b => b.name !== 'Spacecraft')
+            .map(b => {
+                // 1. Translate
+                const pos = b.position.clone().add(transform.offset);
+                // 2. Rotate
+                pos.applyQuaternion(transform.rotation);
 
-            return { ...b, renderPos: pos };
-        });
+                return { ...b, renderPos: pos };
+            });
     }, [bodies, transform]);
 
     return (
@@ -33,6 +37,12 @@ export const SolarSystem: React.FC = () => {
                     scaleFactor={b.scaleFactor}
                 />
             ))}
+
+            {/* Orbits */}
+            <OrbitPath bodyName="io" color="#f4e409" />
+            <OrbitPath bodyName="europa" color="#a67c52" />
+            <OrbitPath bodyName="ganymede" color="#706f6f" />
+            <OrbitPath bodyName="callisto" color="#5c5c5c" />
 
             {/* Visual Guide for Axes if rotating */}
             {frameType === 'rotating' && (

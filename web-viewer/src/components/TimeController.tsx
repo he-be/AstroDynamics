@@ -74,7 +74,7 @@ export const TimeController: React.FC = () => {
     };
 
     return (
-        <div className="absolute bottom-6 left-1/2 -translate-x-1/2 w-[90%] max-w-4xl bg-[#1a1a24]/90 backdrop-blur-md border border-white/10 rounded-xl p-4 flex flex-col gap-2 text-white shadow-2xl">
+        <div className="fixed z-[100] bottom-6 left-1/2 -translate-x-1/2 w-[90%] max-w-4xl bg-gray-900/90 backdrop-blur-md border border-white/10 rounded-xl p-4 flex flex-col gap-2 text-white shadow-2xl">
 
             {/* Top Row: Time Display & Controls */}
             <div className="flex items-center justify-between">

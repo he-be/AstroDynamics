@@ -43,7 +43,7 @@ export const FileLoader: React.FC = () => {
     };
 
     return (
-        <div className="absolute top-4 right-[240px] pointer-events-auto">
+        <div className="fixed z-[100] top-4 right-[240px] pointer-events-auto">
             <input
                 type="file"
                 ref={fileInputRef}
