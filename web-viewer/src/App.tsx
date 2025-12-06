@@ -4,9 +4,11 @@ import './App.css'
 import { Canvas } from '@react-three/fiber';
 import { OrbitControls, Stars } from '@react-three/drei';
 import { SolarSystem } from './visuals/SolarSystem';
+import { Spacecraft } from './visuals/Spacecraft';
 
 import { TimeController } from './components/TimeController';
 import { FrameSelector } from './components/FrameSelector';
+import { FileLoader } from './components/FileLoader';
 
 function App() {
   return (
@@ -23,6 +25,7 @@ function App() {
 
         {/* Content */}
         <SolarSystem />
+        <Spacecraft />
 
         {/* Controls */}
         <OrbitControls makeDefault minDistance={100} maxDistance={20000} />
@@ -37,7 +40,8 @@ function App() {
       {/* Time Controller */}
       <TimeController />
 
-      {/* Frame Selector */}
+      {/* Right Controls */}
+      <FileLoader />
       <FrameSelector />
     </div>
   )
