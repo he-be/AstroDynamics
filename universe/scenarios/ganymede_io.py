@@ -11,6 +11,7 @@ from engine import PhysicsEngine
 from optimization import PorkchopOptimizer
 from mission import MissionPlanner, FlightController
 import frames
+import telemetry
 
 def run_scenario():
     print("=== US-07 Variant: Ganymede to Io Transfer (Direct) ===")
@@ -208,7 +209,11 @@ def run_scenario():
     plt.legend(loc='upper right')
     
     plt.savefig('scenario_gan_io.png')
+    plt.savefig('scenario_gan_io.png')
     print("Saved scenario_gan_io.png")
+    
+    # Export Telemetry
+    telemetry.export_mission_manifest(controller, 'scenario_gan_io.json', mission_name="Ganymede-Io Direct")
 
 if __name__ == "__main__":
     run_scenario()

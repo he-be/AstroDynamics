@@ -9,6 +9,7 @@ sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from engine import PhysicsEngine
 from mission import MissionPlanner, FlightController
 from flyby_utils import FlybyCandidateFinder
+import telemetry
 
 def run_scenario():
     print("=== US-09: Europa Slingshot (Ganymede -> Europa -> Io) ===")
@@ -328,7 +329,11 @@ def run_scenario():
     plt.legend(loc='upper right')
     
     plt.savefig('scenario_slingshot.png')
+    plt.savefig('scenario_slingshot.png')
     print("Saved scenario_slingshot.png")
+    
+    # Export Telemetry
+    telemetry.export_mission_manifest(controller, 'scenario_slingshot.json', mission_name="Europa Slingshot")
 
 if __name__ == "__main__":
     run_scenario()

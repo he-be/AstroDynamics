@@ -11,6 +11,7 @@ from engine import PhysicsEngine
 from planning import solve_lambert
 from frames import FrameManager
 import heyoka as hy
+import telemetry
 
 class MissionPlanner:
     def __init__(self, engine):
@@ -280,7 +281,11 @@ def run_mission():
     plt.axis('equal')
     plt.legend()
     plt.savefig('scenario_l4_mcc.png')
+    plt.savefig('scenario_l4_mcc.png')
     print("Saved scenario_l4_mcc.png")
+    
+    # Export Telemetry
+    telemetry.export_mission_manifest(controller, 'scenario_l4_mcc.json', mission_name="L4 Rendezvous")
 
 if __name__ == "__main__":
     run_mission()

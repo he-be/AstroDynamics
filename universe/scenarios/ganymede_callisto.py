@@ -11,6 +11,7 @@ from engine import PhysicsEngine
 from optimization import PorkchopOptimizer
 from mission import MissionPlanner, FlightController
 import frames
+import telemetry
 
 def run_scenario():
     print("=== US-07: Ganymede to Callisto Transfer (Optimized) ===")
@@ -305,7 +306,11 @@ def run_scenario():
     plt.legend(loc='upper right')
     
     plt.savefig('scenario_gan_cal.png')
+    plt.savefig('scenario_gan_cal.png')
     print("Saved scenario_gan_cal.png")
+    
+    # Export Telemetry
+    telemetry.export_mission_manifest(controller, 'scenario_gan_cal.json', mission_name="Ganymede-Callisto Transfer", bodies=['jupiter', 'ganymede', 'callisto'])
 
 if __name__ == "__main__":
     run_scenario()

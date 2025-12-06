@@ -10,6 +10,7 @@ from engine import PhysicsEngine
 from mission import MissionPlanner, FlightController
 from frames import FrameManager
 from planning import solve_lambert
+import telemetry
 
 class StationKeepingStrategy:
     def __init__(self, engine, controller, frames, target_spec, tolerance_km=50.0):
@@ -230,7 +231,11 @@ def run_scenario():
     plt.legend()
     plt.title(f"US-08 Sentinel: 30 Days Station Keeping")
     plt.savefig('scenario_sentinel.png')
+    plt.savefig('scenario_sentinel.png')
     print("Saved scenario_sentinel.png")
+    
+    # Export Telemetry
+    telemetry.export_mission_manifest(controller, 'scenario_sentinel.json', mission_name="Lagrangian Sentinel (Station Keeping)", bodies=['jupiter', 'ganymede'])
 
 if __name__ == "__main__":
     run_scenario()

@@ -9,6 +9,7 @@ sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from engine import PhysicsEngine
 from mission import MissionPlanner, FlightController
 from planning import solve_lambert, kepler_to_cartesian
+import telemetry
 
 def get_target_state(engine, t_iso):
     """
@@ -181,7 +182,11 @@ def run_scenario():
     
     ax.legend()
     plt.savefig('scenario_rescue.png')
+    plt.savefig('scenario_rescue.png')
     print("Saved scenario_rescue.png")
+    
+    # Export Telemetry
+    telemetry.export_mission_manifest(controller, 'scenario_rescue.json', mission_name="Inclined Rescue", bodies=['jupiter', 'callisto', 'ganymede'])
 
 if __name__ == "__main__":
     run_scenario()

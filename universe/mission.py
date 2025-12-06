@@ -48,14 +48,23 @@ class FlightController:
         self.state = None # [rx,ry,rz, vx,vy,vz] in Jovicentric frame
         self.mass = None
         self.time_iso = None
-        self.trajectory_log = [] # List of [x,y,z]
-        self.maneuver_log = [] # List of {t, dv, duration, label}
+        self._trajectory_log = [] # List of {'time': iso_str, 'state': [6], 'mass': float}
+        self.maneuver_log = [] # List of {t, dv, duration, label, type}
+
+    @property
+    def trajectory_log(self):
+        """Backward compatibility for plotting: returns list of [x,y,z]"""
+        return [entry['state'][:3] for entry in self._trajectory_log]
 
     def set_initial_state(self, state, mass, time_iso):
         self.state = state
         self.mass = mass
         self.time_iso = time_iso
-        self.trajectory_log.append(state[:3])
+        self._trajectory_log.append({
+            'time': time_iso,
+            'state': state,
+            'mass': mass
+        })
 
     def execute_burn(self, plan_dv_vec_km_s, thrust_force, isp, label="Burn"):
         """
@@ -80,8 +89,10 @@ class FlightController:
         self.maneuver_log.append({
             'time_iso': self.time_iso,
             'delta_v_m_s': dv_meters,
+            'delta_v_vec_km_s': plan_dv_vec_km_s.tolist(),
             'duration_s': duration,
             'label': label,
+            'type': 'finite',
             'mass_before': m_in
         })
         
@@ -101,7 +112,13 @@ class FlightController:
         self.state = state_new
         self.mass = mass_new
         self.update_time(duration)
-        self.trajectory_log.append(self.state[:3])
+        
+        # Log final state of burn
+        self._trajectory_log.append({
+            'time': self.time_iso,
+            'state': self.state,
+            'mass': self.mass
+        })
         
     def coast(self, duration, step_points=100):
         # print(f"[Coast] Drifting for {duration:.1f} s...")
@@ -109,12 +126,24 @@ class FlightController:
 
         t_eval = np.linspace(0, duration, step_points)
         
+        # PhysicsEngine now returns full states [x,y,z,vx,vy,vz]
         states = self.engine.propagate(
             self.state, self.time_iso, duration, t_eval=t_eval
         )
         
-        for s in states:
-            self.trajectory_log.append(s[:3])
+        start_dt = datetime.fromisoformat(self.time_iso.replace('Z', '+00:00'))
+        
+        for i, s in enumerate(states):
+            # Calculate time for this step
+            t_offset = t_eval[i]
+            dt = start_dt + timedelta(seconds=t_offset)
+            t_iso = dt.isoformat().replace('+00:00', 'Z')
+            
+            self._trajectory_log.append({
+                'time': t_iso,
+                'state': s,
+                'mass': self.mass
+            })
             
         self.state = states[-1]
         self.update_time(duration)
