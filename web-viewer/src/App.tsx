@@ -10,8 +10,10 @@ import { TimeController } from './components/TimeController';
 import { FrameSelector } from './components/FrameSelector';
 import { ViewSettings } from './components/ViewSettings';
 import { FileLoader } from './components/FileLoader';
+import { ManeuverLog } from './components/ManeuverLog';
+import { ManeuverMarkers } from './visuals/ManeuverMarkers';
 
-import React, { useEffect } from 'react';
+import { useEffect } from 'react';
 import { useMissionStore } from './stores/useMissionStore';
 import { useTimeStore } from './stores/useTimeStore';
 import type { MissionManifest } from './types/mission';
@@ -48,6 +50,7 @@ function App() {
         {/* Content */}
         <SolarSystem />
         <Spacecraft />
+        <ManeuverMarkers />
 
         {/* Controls */}
         <OrbitControls makeDefault minDistance={100} maxDistance={20000} />
@@ -67,7 +70,10 @@ function App() {
       <FrameSelector />
 
       {/* Left Controls */}
-      <ViewSettings />
+      <div className="fixed z-[90] top-20 left-4 flex flex-col gap-4 pointer-events-none">
+        <ViewSettings />
+        <ManeuverLog />
+      </div>
     </div>
   )
 }
