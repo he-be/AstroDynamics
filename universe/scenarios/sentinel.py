@@ -102,7 +102,7 @@ class StationKeepingStrategy:
         
         # Burn 1
         dv1 = v_dep - v_ship
-        self.controller.execute_burn(dv1, 2000.0, 3000.0, label="SK Burn 1")
+        self.controller.execute_burn(dv1, thrust_force=2000.0, isp=3000.0, label="SK Burn 1")
         
         # We assume we Coast for dt_sec?
         # But the main loop controls coasting.
@@ -121,18 +121,19 @@ def run_scenario():
     
     t_start = "2025-01-01T00:00:00Z"
     
-    # 1. Initialize at L2
-    pt_name = 'L2'
+    # 1. Initialize at L4
+    pt_name = 'L4'
     center = 'jupiter'
     sec = 'ganymede'
     
     print(f"Initializing at {center}-{sec} {pt_name}...")
-    l2_state = frames.get_lagrange_point(pt_name, t_start, center, sec)
+    print("Simulating N-Body Physics: Jupiter, Saturn, Sun, Io, Europa, Ganymede, Callisto.")
+    l4_state = frames.get_lagrange_point(pt_name, t_start, center, sec)
     
     # Add small error to verify controller trigger
     # +100 km error
-    p0 = np.array(l2_state[:3]) + np.array([100.0, 0, 0]) 
-    v0 = np.array(l2_state[3:6])
+    p0 = np.array(l4_state[:3]) + np.array([100.0, 0, 0]) 
+    v0 = np.array(l4_state[3:6])
     
     state0 = np.concatenate([p0, v0]).tolist()
     controller.set_initial_state(state0, 1000.0, t_start)
@@ -162,7 +163,7 @@ def run_scenario():
             
             # Simple DV match
             dv2 = v_l2_true - v_ship
-            controller.execute_burn(dv2, 2000.0, 3000.0, label="SK Burn 2 (Stop)")
+            controller.execute_burn(dv2, thrust_force=2000.0, isp=3000.0, label="SK Burn 2 (Stop)")
             
             burn_2_pending = False
             # Resume normal stepping
@@ -235,7 +236,7 @@ def run_scenario():
     print("Saved scenario_sentinel.png")
     
     # Export Telemetry
-    telemetry.export_mission_manifest(controller, 'scenario_sentinel.json', mission_name="Lagrangian Sentinel (Station Keeping)", bodies=['jupiter', 'ganymede'])
+    telemetry.export_mission_manifest(controller, 'scenario_sentinel.json', mission_name="Lagrangian Sentinel (Station Keeping)", bodies=['jupiter', 'sun', 'saturn', 'io', 'europa', 'ganymede', 'callisto'])
 
 if __name__ == "__main__":
     run_scenario()

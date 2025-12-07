@@ -151,22 +151,42 @@ class FrameManager:
         v_vec = v_sec - v_pri
         r_mag = np.linalg.norm(r_vec)
         
-        # 3. Scale Distance
-        if point_name == 'L1':
-            scale = 1.0 - alpha
-        elif point_name == 'L2':
-            scale = 1.0 + alpha
-        else:
-            raise ValueError(f"Lagrange point {point_name} not supported yet (only L1, L2)")
+        # 3. Calculate State
+        # L1/L2/L3 logic (Collinear)
+        if point_name in ['L1', 'L2', 'L3']:
+            if point_name == 'L1':
+                scale = 1.0 - alpha
+            elif point_name == 'L2':
+                scale = 1.0 + alpha
+            elif point_name == 'L3':
+                scale = -(1.0 - (7.0/12.0) * (GM_sec/GM_pri)) # Approx -1
             
-        # 4. Calculate State
-        # Position: Scale radius vector
-        p_L = p_pri + r_vec * scale
-        
-        # Velocity: Scale velocity vector (Assume co-rotation)
-        # V_L_rel = V_sec_rel * scale ??
-        # For circular orbit, v = omega * r. Omega constant. So v scales with r.
-        # V_L = V_pri + (V_sec - V_pri) * scale
-        v_L = v_pri + v_vec * scale
-        
+            p_L = p_pri + r_vec * scale
+            v_L = v_pri + v_vec * scale
+            
+        # L4/L5 logic (Triangular)
+        elif point_name in ['L4', 'L5']:
+            # Rotation around angular momentum vector (z_hat)
+            h_vec = np.cross(r_vec, v_vec)
+            z_hat = h_vec / np.linalg.norm(h_vec)
+            
+            # Angle: L4 is +60 deg, L5 is -60 deg
+            angle = np.pi/3.0 if point_name == 'L4' else -np.pi/3.0
+            c = np.cos(angle)
+            s = np.sin(angle)
+            
+            # Rodrigues formula (simplified since r, v are perpendicular to z_hat)
+            # v_rot = v*cos + cross(k, v)*sin
+            
+            # Position (Rotate r_vec)
+            r_L = r_vec * c + np.cross(z_hat, r_vec) * s
+            p_L = p_pri + r_L
+            
+            # Velocity (Rotate v_vec)
+            v_rel_L = v_vec * c + np.cross(z_hat, v_vec) * s
+            v_L = v_pri + v_rel_L
+            
+        else:
+            raise ValueError(f"Lagrange point {point_name} not supported")
+            
         return np.concatenate([p_L, v_L]).tolist()

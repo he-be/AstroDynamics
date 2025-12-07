@@ -20,6 +20,7 @@ class PhysicsEngine:
         # Bodies
         self.sun = self.planets['sun']
         self.jupiter_bary = self.planets['jupiter barycenter']
+        self.saturn_bary = self.planets['saturn barycenter']
         self.jupiter = self.jup_moons['jupiter'] # Center of Jupiter from moon kernel
         
         self.moons = {
@@ -34,6 +35,7 @@ class PhysicsEngine:
         self.GM = {
             'sun': 1.32712440018e11,
             'jupiter': 1.26686534e8,
+            'saturn': 3.7931187e7,
             'io': 5959.91,
             'europa': 3202.73,
             'ganymede': 9887.83,
@@ -64,7 +66,12 @@ class PhysicsEngine:
             
         target = self.moons.get(body_name.lower())
         if not target:
-            raise ValueError(f"Unknown body: {body_name}")
+            if body_name.lower() == 'sun':
+                target = self.planets['sun']
+            elif body_name.lower() == 'saturn':
+                target = self.planets['saturn barycenter']
+            else:
+                raise ValueError(f"Unknown body: {body_name}")
             
         # Vector from Jupiter Center to Target
         # Note: jup365.bsp allows 'jupiter' center.
@@ -151,6 +158,13 @@ class PhysicsEngine:
         y0.extend(s_sun.position.km)
         y0.extend(s_sun.velocity.km_per_s)
         gms.append(self.GM['sun'])
+        
+        # 2d. Saturn (SSB)
+        sat = self.planets['saturn barycenter']
+        s_sat = sat.at(t_start)
+        y0.extend(s_sat.position.km)
+        y0.extend(s_sat.velocity.km_per_s)
+        gms.append(self.GM['saturn'])
         
         # 2d. Ship (SSB)
         # Input `state_vector` is Jovicentric (Relative to Jupiter Center).
@@ -286,6 +300,9 @@ class PhysicsEngine:
         sun = self.planets['sun'].at(t_start)
         y0.extend(sun.position.km); y0.extend(sun.velocity.km_per_s); gms.append(self.GM['sun'])
         
+        sat = self.planets['saturn barycenter'].at(t_start)
+        y0.extend(sat.position.km); y0.extend(sat.velocity.km_per_s); gms.append(self.GM['saturn'])
+        
         # Ship
         p_s_j = np.array(state_vector[0:3])
         v_s_j = np.array(state_vector[3:6])
@@ -313,12 +330,12 @@ class PhysicsEngine:
             m_dot = hy.par[3]
             m_ship = hy.make_vars("m_ship") # Mass variable (State)
             
-            # Modify Ship Acceleration (Index 6)
-            # Indices in sys_eq: 6*6 + 3,4,5 = 39, 40, 41
-            # sys_eq[39] is (vx, ax). We want new_ax = ax + tx/(m*1000)
-            # Divide by 1000 to convert m/s^2 to km/s^2
+            # Modify Ship Acceleration (Last Body)
+            ship_idx = len(gms) - 1
+            base_idx = ship_idx * 6
+            # ax, ay, az are at base_idx + 3, +4, +5
             
-            for i, param_force in zip([39, 40, 41], [tx, ty, tz]):
+            for i, param_force in zip([base_idx+3, base_idx+4, base_idx+5], [tx, ty, tz]):
                 var, expr = sys_eq[i]
                 new_expr = expr + (param_force / (m_ship * 1000.0))
                 sys_eq[i] = (var, new_expr)
