@@ -1,4 +1,5 @@
 import numpy as np
+from datetime import datetime, timedelta
 
 def stumpff_c(z):
     if z > 0:
@@ -232,3 +233,184 @@ def solve_lambert(r1, r2, dt, mu, cw=False, max_revs=0):
     v2 = (g_dot * r2 - r1) / g
     
     return v1, v2
+
+def refine_transfer(engine, r_start, v_guess, t_start, t_end, target_pos_at_end):
+    """
+    Refines the departure velocity vector using a single-shooting differential correction method
+    to hit the target position in the N-body model.
+    """
+    v_curr = np.array(v_guess, dtype=float)
+    dt_obj = datetime.fromisoformat(t_end.replace('Z', '+00:00')) - datetime.fromisoformat(t_start.replace('Z', '+00:00'))
+    dt = dt_obj.total_seconds()
+    
+    print(f"  [Refining Transfer] Targeting {target_pos_at_end}...")
+    
+    for i in range(25): # Max iterations
+        # Propagate nominal
+        state0 = np.concatenate([r_start, v_curr]).tolist()
+        try:
+            # Safer to pass t_eval=[0.0, dt] to ensure we get exactly the end state time
+            states = engine.propagate(state0, t_start, dt, t_eval=[0.0, dt])
+            if not states:
+                print("Refine Transfer: No states returned from propagate.")
+                return v_curr
+            r_final = np.array(states[-1][:3])
+        except Exception as e:
+            print(f"Refine Transfer Propagation Error: {e}")
+            import traceback
+            traceback.print_exc()
+            return v_curr # Fail safe
+            
+        miss_vec = r_final - np.array(target_pos_at_end)
+        error = np.linalg.norm(miss_vec)
+        
+        if error < 500.0: # 500 km tolerance
+            return v_curr
+            
+        # Finite Difference Jacobian
+        epsilon = 0.001 # 1 m/s perturbation
+        J = np.zeros((3,3))
+        
+        for j in range(3):
+            v_pert = v_curr.copy()
+            v_pert[j] += epsilon
+            state_pert = np.concatenate([r_start, v_pert]).tolist()
+            states_p = engine.propagate(state_pert, t_start, dt, t_eval=[0.0, dt])
+            r_final_p = np.array(states_p[-1][:3])
+            
+            # Column j of J
+            col = (r_final_p - r_final) / epsilon
+            J[:, j] = col
+            
+        # Update
+        try:
+            correction = -np.linalg.solve(J, miss_vec)
+            mag = np.linalg.norm(correction)
+            if mag > 2.0: 
+                correction = correction * (2.0 / mag)
+                
+            v_curr += correction
+        except np.linalg.LinAlgError:
+            return v_curr
+            
+    print(f"    Convergence incomplete (Error {error:.1f} km). Using result.")
+    return v_curr
+
+def refine_finite_transfer(engine, r_start, v_start, t_start, t_end, target_pos_at_end, mass, thrust, isp, seed_dv_vec=None):
+    """
+    Refines the Delta-V vector for a FINITE burn.
+    Iteratively solves for the optimal thrust vector (assumed constant inertial direction)
+    that hits the target position after Burn + Coast.
+    """
+    v_start = np.array(v_start)
+    
+    # 0. Initial Guess
+    dt_obj = datetime.fromisoformat(t_end.replace('Z', '+00:00')) - datetime.fromisoformat(t_start.replace('Z', '+00:00'))
+    dt = dt_obj.total_seconds()
+    
+    if seed_dv_vec is not None:
+        dv_curr = np.array(seed_dv_vec, dtype=float)
+    else:
+        # Simple Lambert for guess
+        v1, _ = solve_lambert(np.array(r_start), np.array(target_pos_at_end), dt, engine.GM['jupiter'])
+        dv_curr = v1 - v_start
+    
+    print(f"  [Finite Shooter] Starting. Guess DV: {np.linalg.norm(dv_curr)*1000:.1f} m/s")
+    
+    params = {'mass': mass, 'thrust': thrust, 'isp': isp, 'g0': 9.80665}
+    t_start_dt = datetime.fromisoformat(t_start.replace('Z', '+00:00'))
+    
+    error = 999999.9
+    
+    for i in range(25):
+        # 1. Calculate Duration from DV Magnitude
+        dv_mag_km = np.linalg.norm(dv_curr)
+        dv_meters = dv_mag_km * 1000.0
+        ve = params['isp'] * params['g0']
+        
+        # Duration (Tsiolkovsky invert)
+        # duration = m0 * ve/F * (1 - exp(-dv/ve))
+        duration = (params['mass'] * ve * (1 - np.exp(-dv_meters/ve))) / params['thrust']
+        if duration < 0.1: duration = 0.1 
+        
+        # Thrust Vector
+        if dv_mag_km < 1e-6:
+             thrust_dir = np.array([1,0,0])
+        else:
+             thrust_dir = dv_curr / dv_mag_km
+             
+        thrust_vec = thrust_dir * params['thrust']
+        state0 = list(r_start) + list(v_start)
+        
+        # 2. Run Burn (Finite Propagation)
+        burn_end_state, _ = engine.propagate_controlled(
+             state0, t_start, duration, thrust_vec.tolist(), params['mass'], params['isp']
+        )
+        
+        # 3. Propagate Coast (Remaining Time)
+        coast_dt = dt - duration
+        if coast_dt < 0: coast_dt = 0
+            
+        t_burn_end = t_start_dt + timedelta(seconds=duration)
+        t_burn_end_iso = t_burn_end.isoformat().replace('+00:00', 'Z')
+        
+        try:
+            # Need to capture state at exactly coast_dt
+            coast_states = engine.propagate(burn_end_state, t_burn_end_iso, coast_dt, t_eval=[0.0, coast_dt])
+            if not coast_states: raise ValueError("Empty states")
+            r_final = np.array(coast_states[-1][:3])
+        except Exception:
+            return dv_curr # Fail safe
+        
+        # 4. Error
+        miss_vec = r_final - np.array(target_pos_at_end)
+        error = np.linalg.norm(miss_vec)
+        
+        if error < 200.0: # Tolerance 200 km (High fidelity)
+             print(f"  [Finite Shooter] Converged! Iter {i}, Error {error:.1f} km")
+             return dv_curr
+             
+        # 5. Jacobian (Finite Diff w.r.t DV Vector)
+        J = np.zeros((3,3))
+        eps = 0.001 # 1 m/s perturbation (Reduced for sensitivity)
+        
+        for k in range(3):
+            dv_pert = dv_curr.copy()
+            dv_pert[k] += eps
+            
+            # Helper logic copy for perturbation
+            dv_p_mag = np.linalg.norm(dv_pert)
+            dur_p = (params['mass'] * ve * (1 - np.exp(-dv_p_mag*1000/ve))) / params['thrust']
+            if dur_p < 0.1: dur_p = 0.1
+            
+            t_dir_p = dv_pert / dv_p_mag if dv_p_mag > 1e-6 else np.array([1,0,0])
+            t_vec_p = t_dir_p * params['thrust']
+            
+            bs_p, _ = engine.propagate_controlled(state0, t_start, dur_p, t_vec_p.tolist(), params['mass'], params['isp'])
+            
+            t_be_p = t_start_dt + timedelta(seconds=dur_p)
+            t_be_iso_p = t_be_p.isoformat().replace('+00:00', 'Z')
+            c_dt_p = dt - dur_p
+            if c_dt_p < 0: c_dt_p = 0
+            
+            cs_p = engine.propagate(bs_p, t_be_iso_p, c_dt_p, t_eval=[0.0, c_dt_p])
+            rp_final = np.array(cs_p[-1][:3])
+            
+            col = (rp_final - r_final) / eps
+            J[:, k] = col
+            
+        # 6. Update
+        try:
+             # Regularize? damped least squares?
+             correction = -np.linalg.solve(J, miss_vec)
+             # Clamp correction
+             mag = np.linalg.norm(correction)
+             if mag > 0.1: correction *= (0.1/mag) # Max 100 m/s step
+             
+             print(f"    Step: {mag*1000:.1f} m/s -> Limit {np.linalg.norm(correction)*1000:.1f} m/s")
+             dv_curr += correction
+        except np.linalg.LinAlgError:
+             return dv_curr
+             
+    print(f"  [Finite Shooter] Max iters. Error {error:.1f} km")
+    return dv_curr

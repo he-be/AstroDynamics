@@ -1,6 +1,6 @@
 import numpy as np
 from datetime import datetime, timedelta
-from planning import solve_lambert
+from universe.planning import solve_lambert
 
 class MissionPlanner:
     def __init__(self, engine):
@@ -152,6 +152,51 @@ class FlightController:
         dt_obj = datetime.fromisoformat(self.time_iso.replace('Z', '+00:00'))
         dt_obj += timedelta(seconds=seconds_added)
         self.time_iso = dt_obj.isoformat().replace('+00:00', 'Z')
+
+    def execute_impulsive_burn(self, dv_vec_km_s, isp, label="Impulsive Burn"):
+        """
+        Executes an impulsive (instantaneous) burn.
+        """
+        dv_mag_km = np.linalg.norm(dv_vec_km_s)
+        if dv_mag_km < 1e-9: return
+
+        # Fuel Calculation
+        g0 = 9.80665
+        ve = isp * g0 # m/s
+        dv_meters = dv_mag_km * 1000.0
+        
+        m_in = self.mass
+        m_final = m_in * np.exp(-dv_meters / ve)
+        fuel_used = m_in - m_final
+        
+        print(f"[{label}] Executing Instant DV={dv_meters:.2f} m/s. Fuel={fuel_used:.1f} kg. Time={self.time_iso}")
+        
+        self.maneuver_log.append({
+            'time_iso': self.time_iso,
+            'delta_v_m_s': dv_meters,
+            'delta_v_vec_km_s': dv_vec_km_s.tolist(),
+            'duration_s': 0.0,
+            'label': label,
+            'type': 'impulsive',
+            'mass_before': m_in
+        })
+        
+        # Update State
+        # State: [rx, ry, rz, vx, vy, vz]
+        current_vel = np.array(self.state[3:6])
+        new_vel = current_vel + dv_vec_km_s
+        self.state[3] = new_vel[0]
+        self.state[4] = new_vel[1]
+        self.state[5] = new_vel[2]
+        
+        self.mass = m_final
+        
+        # Log
+        self._trajectory_log.append({
+            'time': self.time_iso,
+            'state': list(self.state),
+            'mass': self.mass
+        })
         
     def get_position(self):
         return np.array(self.state[:3])
