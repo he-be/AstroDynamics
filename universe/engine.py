@@ -149,8 +149,7 @@ class PhysicsEngine:
         # Order: Io, Europa, Ganymede, Callisto
         moon_names = ['io', 'europa', 'ganymede', 'callisto']
         for name in moon_names:
-            body = self.jup_moons[name].at(t_start)
-            s_b_jb = body.at(t_start) 
+            s_b_jb = self.jup_moons[name].at(t_start)
             p_b_ssb = p_jb + s_b_jb.position.km
             v_b_ssb = v_jb + s_b_jb.velocity.km_per_s
             
