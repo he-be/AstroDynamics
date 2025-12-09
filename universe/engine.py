@@ -4,7 +4,7 @@ from skyfield.api import Loader, Topos
 
 
 class PhysicsEngine:
-    def __init__(self, data_dir='./data'):
+    def __init__(self, data_dir='./data', include_saturn=True):
         if not os.path.exists(data_dir):
             os.makedirs(data_dir)
             
@@ -42,9 +42,15 @@ class PhysicsEngine:
             'callisto': 7179.28
         }
         
+        self.include_saturn = include_saturn
+        
         # Heyoka Integrator Cache
         self.ta = None
+        self.ta = None
         self.ta_controlled = None
+        self.ta_controlled_var = None
+        self.ta_controlled_lts = None
+        self.ta_controlled_lts_var = None
 
     def get_body_state(self, body_name: str, time_iso: str):
         """
@@ -143,7 +149,7 @@ class PhysicsEngine:
         # Order: Io, Europa, Ganymede, Callisto
         moon_names = ['io', 'europa', 'ganymede', 'callisto']
         for name in moon_names:
-            body = self.jup_moons[name]
+            body = self.jup_moons[name].at(t_start)
             s_b_jb = body.at(t_start) 
             p_b_ssb = p_jb + s_b_jb.position.km
             v_b_ssb = v_jb + s_b_jb.velocity.km_per_s
@@ -159,12 +165,13 @@ class PhysicsEngine:
         y0.extend(s_sun.velocity.km_per_s)
         gms.append(self.GM['sun'])
         
-        # 2d. Saturn (SSB)
-        sat = self.planets['saturn barycenter']
-        s_sat = sat.at(t_start)
-        y0.extend(s_sat.position.km)
-        y0.extend(s_sat.velocity.km_per_s)
-        gms.append(self.GM['saturn'])
+        if self.include_saturn:
+            # 2d. Saturn (SSB)
+            sat = self.planets['saturn barycenter']
+            s_sat = sat.at(t_start)
+            y0.extend(s_sat.position.km)
+            y0.extend(s_sat.velocity.km_per_s)
+            gms.append(self.GM['saturn'])
         
         # 2d. Ship (SSB)
         # Input `state_vector` is Jovicentric (Relative to Jupiter Center).
@@ -236,8 +243,13 @@ class PhysicsEngine:
             p_jup = final_y[0:3]
             v_jup = final_y[3:6]
             
-            p_ship = final_y[-6:-3]
-            v_ship = final_y[-3:]
+            # Ship is the last body in the N-body system
+            # Its state is at index (num_bodies - 1) * 6
+            ship_body_idx = len(gms) - 1
+            ship_state_idx = ship_body_idx * 6
+            
+            p_ship = final_y[ship_state_idx : ship_state_idx+3]
+            v_ship = final_y[ship_state_idx+3 : ship_state_idx+6]
             
             # Relative
             p_rel = np.array(p_ship) - np.array(p_jup)
@@ -245,29 +257,21 @@ class PhysicsEngine:
             
             return np.concatenate([p_rel, v_rel]).tolist()
 
-    def propagate_controlled(self, state_vector, time_iso, duration, thrust_vector, mass, isp):
+    def propagate_controlled(self, state_vector, time_iso, duration, control_params, mass, isp, with_variational_equations=False, steering_mode='constant', thrust_magnitude=None):
         """
-        Propagate with Finite Burn (Constant Thrust).
-        
-        Args:
-            state_vector: [x,y,z,vx,vy,vz] (Jovicentric).
-            time_iso: Start Time.
-            duration: Burn duration (s).
-            thrust_vector: [Fx, Fy, Fz] in Newtons (Inertial Frame).
-            mass: Initial Mass (kg).
-            isp: Specific Impulse (s).
-            
-        Returns:
-            (final_state_vector, final_mass)
+        Propagate with Finite Burn.
         """
         try:
+            if steering_mode == 'linear_tangent' and control_params is not None:
+                # print(f"DEBUG: Engine Params: {control_params[0]:.4f} ...")
+                pass 
             import heyoka as hy
         except ImportError:
             raise ImportError("Heyoka not found.")
             
         from datetime import datetime, timezone
         
-        # 1. Parse Time & State (Same as propagate)
+        # 1. Parse Time & State
         if time_iso.endswith('Z'): time_iso = time_iso[:-1] + '+00:00'
         dt_obj = datetime.fromisoformat(time_iso)
         if dt_obj.tzinfo is None: dt_obj = dt_obj.replace(tzinfo=timezone.utc)
@@ -276,13 +280,9 @@ class PhysicsEngine:
         y0 = []
         gms = []
         
-        # Bodies setup (Jupiter, Moons, Sun, Ship)
-        # Note: Code duplication with propagate(). Could refactor, but for now inline for clarity.
-        
-        # Jup Bary
+        # Bodies Setup
         jb = self.planets['jupiter barycenter'].at(t_start)
         p_jb, v_jb = jb.position.km, jb.velocity.km_per_s
-        # Jup Center
         jc = self.jup_moons['jupiter'].at(t_start)
         p_jc, v_jc = jc.position.km, jc.velocity.km_per_s
         
@@ -300,8 +300,9 @@ class PhysicsEngine:
         sun = self.planets['sun'].at(t_start)
         y0.extend(sun.position.km); y0.extend(sun.velocity.km_per_s); gms.append(self.GM['sun'])
         
-        sat = self.planets['saturn barycenter'].at(t_start)
-        y0.extend(sat.position.km); y0.extend(sat.velocity.km_per_s); gms.append(self.GM['saturn'])
+        if self.include_saturn:
+            sat = self.planets['saturn barycenter'].at(t_start)
+            y0.extend(sat.position.km); y0.extend(sat.velocity.km_per_s); gms.append(self.GM['saturn'])
         
         # Ship
         p_s_j = np.array(state_vector[0:3])
@@ -310,73 +311,190 @@ class PhysicsEngine:
         y0.extend(v_jup_ssb + v_s_j)
         gms.append(0.0)
         
-        # Add Initial Mass to State
         y0.append(float(mass))
         y0 = [float(x) for x in y0]
         gms = [float(x) for x in gms]
         
-        # 2. Setup/Reuse Controlled Integrator
-        if self.ta_controlled is None:
-            import sys; sys.setrecursionlimit(10000)
+        integrator = None
+        
+        # 2. Setup Integrator
+        if steering_mode == 'linear_tangent':
+            needs_init = False
+            if with_variational_equations:
+                if self.ta_controlled_lts_var is None: needs_init = True
+            else:
+                if self.ta_controlled_lts is None: needs_init = True
             
-            # Base N-Body System
-            sys_eq = hy.model.nbody(len(gms), masses=gms)
-            
-            # Define Parameters and Variables
-            # Use heyoka.par[index] for runtime parameters
-            tx = hy.par[0]
-            ty = hy.par[1]
-            tz = hy.par[2]
-            m_dot = hy.par[3]
-            m_ship = hy.make_vars("m_ship") # Mass variable (State)
-            
-            # Modify Ship Acceleration (Last Body)
-            ship_idx = len(gms) - 1
-            base_idx = ship_idx * 6
-            # ax, ay, az are at base_idx + 3, +4, +5
-            
-            for i, param_force in zip([base_idx+3, base_idx+4, base_idx+5], [tx, ty, tz]):
-                var, expr = sys_eq[i]
-                new_expr = expr + (param_force / (m_ship * 1000.0))
-                sys_eq[i] = (var, new_expr)
+            if needs_init:
+                import sys; sys.setrecursionlimit(10000)
+                sys_eq = hy.model.nbody(len(gms), masses=gms)
                 
-            # Add Mass Equation: dm/dt = -m_dot
-            sys_eq.append((m_ship, -m_dot))
+                # Parameters: ax, ay, az, bx, by, bz, m_dot, F_mag
+                ax, ay, az = hy.par[0], hy.par[1], hy.par[2]
+                bx, by, bz = hy.par[3], hy.par[4], hy.par[5]
+                m_dot_par = hy.par[6]
+                F_mag_par = hy.par[7]
+                
+                m_ship = hy.make_vars("m_ship")
+                
+                # Thrust Vector Construction
+                tv_x = ax + bx * hy.time
+                tv_y = ay + by * hy.time
+                tv_z = az + bz * hy.time
+                tv_norm = hy.sqrt(tv_x**2 + tv_y**2 + tv_z**2)
+                
+                dir_x = tv_x / tv_norm
+                dir_y = tv_y / tv_norm
+                dir_z = tv_z / tv_norm
+                
+                force_acc = F_mag_par / (m_ship * 1000.0)
+                
+                ship_idx = len(gms) - 1
+                base_idx = ship_idx * 6
+                
+                # Acceleration
+                for i, acc_expr in zip([base_idx+3, base_idx+4, base_idx+5], [force_acc*dir_x, force_acc*dir_y, force_acc*dir_z]):
+                    var, expr = sys_eq[i]
+                    sys_eq[i] = (var, expr + acc_expr)
+                
+                sys_eq.append((m_ship, -m_dot_par))
+                
+                if with_variational_equations:
+                    # Differentiate w.r.t first 6 parameters (ax..bz)
+                    var_sys = hy.var_ode_sys(sys_eq, [hy.par[0], hy.par[1], hy.par[2], hy.par[3], hy.par[4], hy.par[5]])
+                    self.ta_controlled_lts_var = hy.taylor_adaptive(var_sys, y0)
+                else:
+                    self.ta_controlled_lts = hy.taylor_adaptive(sys_eq, y0)
             
-            self.ta_controlled = hy.taylor_adaptive(sys_eq, y0)
+            integrator = self.ta_controlled_lts_var if with_variational_equations else self.ta_controlled_lts
             
-        # 3. Update Parameters & State
-        # Calculate Flow Rate
-        thrust_mag = np.linalg.norm(thrust_vector)
-        g0 = 9.80665
-        flow_rate = thrust_mag / (isp * g0)
+            # Setup Params
+            ax, ay, az = control_params[0:3]
+            bx, by, bz = control_params[3:6]
+            
+            if thrust_magnitude is None: raise ValueError("thrust_magnitude required for LTS")
+            g0 = 9.80665
+            flow_rate = thrust_magnitude / (isp * g0)
+            
+            integrator.pars[:] = [ax, ay, az, bx, by, bz, flow_rate, thrust_magnitude]
+            
+            integrator.time = 0.0
+            
+            if with_variational_equations:
+                # Initialize full state for var eqs
+                n_states = len(y0)
+                full_state = np.zeros(len(integrator.state))
+                full_state[0:n_states] = y0
+                integrator.state[:] = full_state
+            else:
+                integrator.state[:] = y0
+            
+        else:
+            # Constant Steering
+            if self.ta_controlled is None and not with_variational_equations:
+                 import sys; sys.setrecursionlimit(10000)
+                 sys_eq = hy.model.nbody(len(gms), masses=gms)
+                 tx, ty, tz, m_dot = hy.par[0], hy.par[1], hy.par[2], hy.par[3]
+                 m_ship = hy.make_vars("m_ship")
+                 ship_idx = len(gms) - 1
+                 base_idx = ship_idx * 6
+                 for i, param_force in zip([base_idx+3, base_idx+4, base_idx+5], [tx, ty, tz]):
+                     var, expr = sys_eq[i]
+                     new_expr = expr + (param_force / (m_ship * 1000.0))
+                     sys_eq[i] = (var, new_expr)
+                 sys_eq.append((m_ship, -m_dot))
+                 self.ta_controlled = hy.taylor_adaptive(sys_eq, y0)
+            
+            if with_variational_equations:
+                 if self.ta_controlled_var is None:
+                     import sys; sys.setrecursionlimit(10000)
+                     sys_eq = hy.model.nbody(len(gms), masses=gms)
+                     tx, ty, tz, m_dot = hy.par[0], hy.par[1], hy.par[2], hy.par[3]
+                     m_ship = hy.make_vars("m_ship")
+                     ship_idx = len(gms) - 1
+                     base_idx = ship_idx * 6
+                     for i, param_force in zip([base_idx+3, base_idx+4, base_idx+5], [tx, ty, tz]):
+                         var, expr = sys_eq[i]
+                         new_expr = expr + (param_force / (m_ship * 1000.0))
+                         sys_eq[i] = (var, new_expr)
+                     sys_eq.append((m_ship, -m_dot))
+                     
+                     state_vars = [v for v, _ in sys_eq]
+                     params_vars = [hy.par[0], hy.par[1], hy.par[2]]
+                     vos = hy.var_ode_sys(sys_eq, args=state_vars + params_vars)
+                     sys_eq_aug = vos.sys
+                     
+                     n_states = len(y0)
+                     n_params = 3
+                     stm_init_state = np.eye(n_states).flatten()
+                     stm_init_params = np.zeros(n_states * n_params)
+                     y0_var = np.concatenate([y0, stm_init_state, stm_init_params])
+                     self.ta_controlled_var = hy.taylor_adaptive(sys_eq_aug, y0_var)
+                     
+                 integrator = self.ta_controlled_var
+            else:
+                 integrator = self.ta_controlled
+            
+            thrust_vec = control_params
+            thrust_mag = np.linalg.norm(thrust_vec)
+            g0 = 9.80665
+            flow_rate = thrust_mag / (isp * g0)
+            
+            integrator.pars[:] = [thrust_vec[0], thrust_vec[1], thrust_vec[2], flow_rate]
+            
+            if with_variational_equations:
+                 n_states = len(y0)
+                 stm_init_state = np.eye(n_states).flatten()
+                 stm_init_params = np.zeros(n_states * 3)
+                 y0_var = np.concatenate([y0, stm_init_state, stm_init_params])
+                 integrator.time = 0.0
+                 integrator.state[:] = y0_var
+            else:
+                 integrator.time = 0.0
+                 integrator.state[:] = y0
 
-        # Update Params: [tx, ty, tz, m_dot]
-        self.ta_controlled.pars[:] = [thrust_vector[0], thrust_vector[1], thrust_vector[2], flow_rate]
+        # Propagate
+        integrator.propagate_until(float(duration))
+        final = integrator.state
         
-        # Update State
-        self.ta_controlled.time = 0.0
-        self.ta_controlled.state[:] = y0
-        
-        # 4. Propagate
-        self.ta_controlled.propagate_until(float(duration))
-        
-        # 5. Extract Result
-        final = self.ta_controlled.state
-        
-        # Ship: Indices 36-42 (pos, vel). Mass is last (42).
-        # Jup: 0-6.
-        # Relative State
+        # Ship Extraction
         p_jup = final[0:3]
         v_jup = final[3:6]
         
-        p_ship = final[-7:-4] # x,y,z of ship (before mass)
-        v_ship = final[-4:-1] # vx,vy,vz of ship
-        final_mass = final[-1] # last element is mass
+        # Ship Index Calculation
+        ship_body_idx = len(gms) - 1
+        ship_state_idx = ship_body_idx * 6
+        
+        p_ship = final[ship_state_idx : ship_state_idx+3]
+        v_ship = final[ship_state_idx+3 : ship_state_idx+6]
+        final_mass = final[ship_state_idx+6]
         
         p_rel = np.array(p_ship) - np.array(p_jup)
         v_rel = np.array(v_ship) - np.array(v_jup)
         
         final_state = np.concatenate([p_rel, v_rel]).tolist()
         
-        return final_state, float(final_mass)
+        if with_variational_equations:
+             if steering_mode == 'linear_tangent':
+                 # Extract Jacobian (3x6) for position
+                 n_sys = len(y0)
+                 jac = np.zeros((3, 6))
+                 
+                 for j in range(6): # 6 params: ax, ay, az, bx, by, bz
+                      # Start index of variations for param j
+                      # The variations segments are appended in order of params (0 to 5)
+                      # Each segment has length n_sys
+                      var_start = n_sys + j * n_sys
+                      
+                      # Derivatives of Ship Position [x, y, z] at ship_state_idx
+                      jac[0, j] = final[var_start + ship_state_idx]
+                      jac[1, j] = final[var_start + ship_state_idx + 1]
+                      jac[2, j] = final[var_start + ship_state_idx + 2]
+                 
+                 return final_state, float(final_mass), jac
+             else:
+                 return final_state, float(final_mass), final
+        else:
+             return final_state, float(final_mass)
+
+

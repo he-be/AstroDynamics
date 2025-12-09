@@ -296,7 +296,7 @@ def refine_transfer(engine, r_start, v_guess, t_start, t_end, target_pos_at_end)
     print(f"    Convergence incomplete (Error {error:.1f} km). Using result.")
     return v_curr
 
-def refine_finite_transfer(engine, r_start, v_start, t_start, t_end, target_pos_at_end, mass, thrust, isp, seed_dv_vec=None):
+def refine_finite_transfer(engine, r_start, v_start, t_start, t_end, target_pos_at_end, mass, thrust, isp, seed_dv_vec=None, use_variational=True):
     """
     Refines the Delta-V vector for a FINITE burn.
     Iteratively solves for the optimal thrust vector (assumed constant inertial direction)
@@ -340,64 +340,165 @@ def refine_finite_transfer(engine, r_start, v_start, t_start, t_end, target_pos_
              thrust_dir = dv_curr / dv_mag_km
              
         thrust_vec = thrust_dir * params['thrust']
-        state0 = list(r_start) + list(v_start)
         
-        # 2. Run Burn (Finite Propagation)
-        burn_end_state, _ = engine.propagate_controlled(
-             state0, t_start, duration, thrust_vec.tolist(), params['mass'], params['isp']
-        )
+        # 2. Run Burn & Coast
+        r_final = None
+        v_final = None
+        burn_end_state = None
+        burn_end_mass = None
         
-        # 3. Propagate Coast (Remaining Time)
-        coast_dt = dt - duration
-        if coast_dt < 0: coast_dt = 0
+        burn_res = None
+        coast_res = None
+        
+        # Branch A: Variational Equations (Analytical)
+        if use_variational:
+            # Run Burn with STM
+            burn_start_state = list(r_start) + list(v_start)
+            burn_end_state, burn_end_mass, burn_res  = engine.propagate_controlled(
+                 burn_start_state, t_start, duration, thrust_vec.tolist(), params['mass'], params['isp'],
+                 with_variational_equations=True
+            )
             
-        t_burn_end = t_start_dt + timedelta(seconds=duration)
-        t_burn_end_iso = t_burn_end.isoformat().replace('+00:00', 'Z')
-        
-        try:
-            # Need to capture state at exactly coast_dt
-            coast_states = engine.propagate(burn_end_state, t_burn_end_iso, coast_dt, t_eval=[0.0, coast_dt])
-            if not coast_states: raise ValueError("Empty states")
-            r_final = np.array(coast_states[-1][:3])
-        except Exception:
-            return dv_curr # Fail safe
+            # Coast with STM
+            coast_dt = dt - duration
+            if coast_dt < 0: coast_dt = 0.0
+            t_burn_end = t_start_dt + timedelta(seconds=duration)
+            t_burn_end_iso = t_burn_end.isoformat().replace('+00:00', 'Z')
+            
+            try:
+                coast_end_state, _, coast_res = engine.propagate_controlled(
+                    burn_end_state, t_burn_end_iso, coast_dt, [0.0, 0.0, 0.0], burn_end_mass, params['isp'],
+                    with_variational_equations=True
+                )
+                r_final = np.array(coast_end_state[:3])
+                v_final = np.array(coast_end_state[3:6])
+            except Exception as e:
+                print(f"Propagation Error (VarEq): {e}")
+                return dv_curr
+
+        # Branch B: Standard Propagation (for Finite Diff or just checking error)
+        else:
+             state0 = list(r_start) + list(v_start)
+             burn_end_state, burn_end_mass = engine.propagate_controlled(
+                 state0, t_start, duration, thrust_vec.tolist(), params['mass'], params['isp'],
+                 with_variational_equations=False
+             )
+             coast_dt = dt - duration
+             if coast_dt < 0: coast_dt = 0.0
+             t_burn_end = t_start_dt + timedelta(seconds=duration)
+             t_burn_end_iso = t_burn_end.isoformat().replace('+00:00', 'Z')
+             
+             try:
+                 coast_states = engine.propagate(burn_end_state, t_burn_end_iso, coast_dt, t_eval=[0.0, coast_dt])
+                 r_final = np.array(coast_states[-1][:3])
+             except Exception:
+                 return dv_curr
         
         # 4. Error
         miss_vec = r_final - np.array(target_pos_at_end)
         error = np.linalg.norm(miss_vec)
         
-        if error < 200.0: # Tolerance 200 km (High fidelity)
+        if error < 200.0:
              print(f"  [Finite Shooter] Converged! Iter {i}, Error {error:.1f} km")
              return dv_curr
              
-        # 5. Jacobian (Finite Diff w.r.t DV Vector)
-        J = np.zeros((3,3))
-        eps = 0.001 # 1 m/s perturbation (Reduced for sensitivity)
+        # 5. Jacobian Calculation
+        J = None
         
-        for k in range(3):
-            dv_pert = dv_curr.copy()
-            dv_pert[k] += eps
+        if use_variational:
+            # Analytical Jacobian
+            # Determine N from length L: L = N + N^2 + 3N = N^2 + 4N
+            L = len(burn_res)
+            import math
+            N = int(-2 + math.sqrt(4 + L))
             
-            # Helper logic copy for perturbation
-            dv_p_mag = np.linalg.norm(dv_pert)
-            dur_p = (params['mass'] * ve * (1 - np.exp(-dv_p_mag*1000/ve))) / params['thrust']
-            if dur_p < 0.1: dur_p = 0.1
+            # Helper to extract Matrix Blocks
+            def extract_matrices(flat_res):
+                stm_flat = flat_res[N : N + N*N]
+                stm = stm_flat.reshape((N, N))
+                s_param_flat = flat_res[N + N*N :]
+                s_param = s_param_flat.reshape((3, N)).T
+                return stm, s_param
+
+            # A. Get d_rf/d_T
+            _, S_burn = extract_matrices(burn_res)
+            Phi_coast, _ = extract_matrices(coast_res)
             
-            t_dir_p = dv_pert / dv_p_mag if dv_p_mag > 1e-6 else np.array([1,0,0])
-            t_vec_p = t_dir_p * params['thrust']
+            # Ship Position indices
+            # State vector ends with [..., px, py, pz, vx, vy, vz, mass]
+            # px is at N-7, py at N-6, pz at N-5
+            ship_pos_idx = [N - 7, N - 6, N - 5]
             
-            bs_p, _ = engine.propagate_controlled(state0, t_start, dur_p, t_vec_p.tolist(), params['mass'], params['isp'])
+            Phi_coast_r = Phi_coast[ship_pos_idx, :] # 3 x N
+            dr_dT = Phi_coast_r @ S_burn # 3 x 3
             
-            t_be_p = t_start_dt + timedelta(seconds=dur_p)
-            t_be_iso_p = t_be_p.isoformat().replace('+00:00', 'Z')
-            c_dt_p = dt - dur_p
-            if c_dt_p < 0: c_dt_p = 0
+            # B. d_T / d_dv
+            dv_mag = np.linalg.norm(dv_curr)
+            u = dv_curr / dv_mag
+            F = params['thrust']
+            I = np.eye(3)
+            dT_ddv = (F / dv_mag) * (I - np.outer(u, u))
             
-            cs_p = engine.propagate(bs_p, t_be_iso_p, c_dt_p, t_eval=[0.0, c_dt_p])
-            rp_final = np.array(cs_p[-1][:3])
+            term1 = dr_dT @ dT_ddv
             
-            col = (rp_final - r_final) / eps
-            J[:, k] = col
+            # C. Term 2: d_rf/d_dur * d_dur/d_dv
+            m0 = params['mass']
+            dv_mag_m = dv_mag * 1000.0
+            exp_factor = np.exp(-dv_mag_m / ve)
+            d_dur_d_mag_m = (m0 / F) * exp_factor
+            
+            d_dur_d_dv = (d_dur_d_mag_m * 1000.0) * u
+            
+            # d_rf/d_dur Calculation
+            # Phi_rv: Rows Pos, Cols Vel of Ship
+            # Ship Pos: N-7 to N-4
+            # Ship Vel: N-4 to N-1
+            Phi_rv = Phi_coast[N-7:N-4, N-4:N-1]
+            a_thrust_end = thrust_vec / burn_end_mass
+            d_rf_d_dur = Phi_rv @ a_thrust_end
+            
+            term2 = np.outer(d_rf_d_dur, d_dur_d_dv)
+            
+            J = term1 + term2
+            
+        else:
+            # Finite Difference Jacobian
+            J = np.zeros((3,3))
+            eps = 0.001 # 1 m/s perturbation
+            state0 = list(r_start) + list(v_start)
+            
+            for k in range(3):
+                dv_pert = dv_curr.copy()
+                dv_pert[k] += eps
+                
+                # Recalculate duration/thrust
+                dv_p_mag = np.linalg.norm(dv_pert)
+                dur_p = (params['mass'] * ve * (1 - np.exp(-dv_p_mag*1000.0/ve))) / params['thrust']
+                if dur_p < 0.1: dur_p = 0.1
+                
+                t_dir_p = dv_pert / dv_p_mag if dv_p_mag > 1e-6 else np.array([1,0,0])
+                t_vec_p = t_dir_p * params['thrust']
+                
+                # Propagate Burn
+                bs_p, bm_p = engine.propagate_controlled(
+                    state0, t_start, dur_p, t_vec_p.tolist(), params['mass'], params['isp'],
+                    with_variational_equations=False
+                )
+                
+                # Propagate Coast
+                c_dt_p = dt - dur_p
+                if c_dt_p < 0: c_dt_p = 0.0
+                t_be_p = t_start_dt + timedelta(seconds=dur_p)
+                t_be_iso_p = t_be_p.isoformat().replace('+00:00', 'Z')
+                
+                try:
+                    cs_p = engine.propagate(bs_p, t_be_iso_p, c_dt_p, t_eval=[0.0, c_dt_p])
+                    rp_final = np.array(cs_p[-1][:3])
+                except:
+                    rp_final = r_final # Fallback
+                
+                col = (rp_final - r_final) / eps
+                J[:, k] = col
             
         # 6. Update
         try:
@@ -414,3 +515,61 @@ def refine_finite_transfer(engine, r_start, v_start, t_start, t_end, target_pos_
              
     print(f"  [Finite Shooter] Max iters. Error {error:.1f} km")
     return dv_curr
+
+def refine_lts_transfer(engine, r_start, v_start, t_start, t_end, target_pos_at_end, mass, thrust, isp, seed_dv_vec=None):
+    """
+    Refines transfer using Linear Tangent Steering (LTS).
+    Optimizes bilinear tangent parameters [ax, ay, az, bx, by, bz].
+    u(t) = unit(a + b*t).
+    """
+    control_params = np.zeros(6)
+    # Init from seed (constant direction assumption)
+    if seed_dv_vec is not None:
+         dv_norm = np.linalg.norm(seed_dv_vec)
+         if dv_norm > 1e-6:
+             control_params[0:3] = np.array(seed_dv_vec) / dv_norm
+         else:
+             control_params[0] = 1.0
+    else:
+         control_params[0] = 1.0 # Default X direction
+         
+    dt_obj = datetime.fromisoformat(t_end.replace('Z', '+00:00')) - datetime.fromisoformat(t_start.replace('Z', '+00:00'))
+    dt = dt_obj.total_seconds()
+    
+    print(f"  [LTS Refinement] Targeting {target_pos_at_end} with LTS...")
+    
+    for i in range(20):
+        # 1. Propagate with Variational Equations (State + Jacobian)
+        try:
+            res_list, final_mass, J = engine.propagate_controlled(
+                list(r_start) + list(v_start), t_start, dt, list(control_params), mass, isp,
+                steering_mode='linear_tangent', thrust_magnitude=thrust,
+                with_variational_equations=True
+            )
+        except Exception as e:
+            print(f"Propagate failed or VarEq error: {e}")
+            break
+            
+        r_p = np.array(res_list[0:3])
+        miss = r_p - np.array(target_pos_at_end)
+        err_norm = np.linalg.norm(miss)
+        
+        print(f"    Iter {i}: Error = {err_norm:.1f} km")
+        
+        if err_norm < 10.0: # Convergence check
+            return control_params, r_p, final_mass
+            
+        # 2. Update (Min Norm)
+        try:
+            dx = -np.linalg.pinv(J) @ miss
+            
+            # Limit step
+            mag = np.linalg.norm(dx)
+            if mag > 0.5: dx = dx * (0.5 / mag)
+            
+            control_params += dx
+            
+        except np.linalg.LinAlgError:
+            break
+            
+    return control_params
