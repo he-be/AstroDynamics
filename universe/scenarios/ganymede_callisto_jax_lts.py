@@ -232,6 +232,66 @@ def run_jax_lts_scenario():
     plt.legend()
     plt.savefig("scenario_jax_lts.png")
     print("Saved scenario_jax_lts.png")
+    
+    # Export for Viewer
+    import json
+    json_path = "trajectory_lts.json"
+    print(f"Exporting (MissionManifest format) to {json_path}...")
+    
+    # Format:
+    # meta: { missionName, startTime, endTime, bodies }
+    # timeline: [ { time(sec), position, velocity, mass } ]
+    
+    # 1. Start Time
+    start_iso = full_log[0]['time'] # ISO
+    start_dt = datetime.fromisoformat(start_iso.replace('Z', '+00:00'))
+    
+    formatted_timeline = []
+    bodies_to_export = ["ganymede", "callisto", "jupiter"]
+    
+    for entry in full_log:
+        curr_iso = entry['time']
+        curr_dt = datetime.fromisoformat(curr_iso.replace('Z', '+00:00'))
+        dt_seconds = (curr_dt - start_dt).total_seconds()
+        
+        bodies_pos = {}
+        for b in bodies_to_export:
+            if b == 'jupiter':
+                bodies_pos[b] = [0.0, 0.0, 0.0]
+            else:
+                # Ensure ISO format is clean for Skyfield if needed, but engine handles it
+                p_b, _ = engine.get_body_state(b, curr_iso) 
+                bodies_pos[b] = list(p_b)
+        
+        formatted_timeline.append({
+            "time": dt_seconds,
+            "position": entry['position'],
+            "velocity": entry['velocity'],
+            "mass": entry['mass'],
+            "bodies": bodies_pos
+        })
+        
+    manifest = {
+        "meta": {
+            "missionName": "JAX LTS: Ganymede to Callisto",
+            "startTime": start_iso,
+            "endTime": full_log[-1]['time'],
+            "bodies": ["ganymede", "callisto", "jupiter"]
+        },
+        "timeline": formatted_timeline,
+        "maneuvers": [
+            {
+                "startTime": 0.0,
+                "duration": t_burn,
+                "deltaV": [0.0, 0.0, 0.0], 
+                "type": "finite"
+            }
+        ]
+    }
+
+    with open(json_path, 'w') as f:
+        json.dump(manifest, f, indent=2)
+    print(f"Saved {json_path}")
 
 
 if __name__ == "__main__":
