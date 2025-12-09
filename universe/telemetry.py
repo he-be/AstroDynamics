@@ -13,7 +13,7 @@ def export_mission_manifest(controller, filename, mission_name="Mission", bodies
         bodies: List of relevant bodies (e.g. ['jupiter', 'ganymede'])
     """
     if bodies is None:
-        bodies = ['jupiter', 'ganymede']
+        bodies = ['jupiter', 'io', 'europa', 'ganymede', 'callisto']
 
     log = controller._trajectory_log
     if not log:
@@ -34,18 +34,34 @@ def export_mission_manifest(controller, filename, mission_name="Mission", bodies
 
     # 1. Timeline
     timeline = []
+    
+    # Pre-fetch body states? No, loop is fine.
+    
     for entry in log:
-        t_ts = parse_time(entry['time'])
+        t_iso = entry['time']
+        t_ts = parse_time(t_iso)
         t_rel = t_ts - epoch_ts
         
         state = entry['state'] # [rx,ry,rz, vx,vy,vz]
         mass = entry['mass']
         
+        # Capture Body States
+        current_bodies = {}
+        if controller.engine and bodies:
+            for b in bodies:
+                if b.lower() == 'jupiter': continue # Jupiter is 0,0,0
+                try:
+                    p, _ = controller.engine.get_body_state(b, t_iso)
+                    current_bodies[b] = list(p)
+                except Exception:
+                    pass
+
         timeline.append({
             'time': t_rel,
             'position': list(state[:3]),
             'velocity': list(state[3:6]),
-            'mass': float(mass)
+            'mass': float(mass),
+            'bodies': current_bodies
         })
 
     # 2. Maneuvers

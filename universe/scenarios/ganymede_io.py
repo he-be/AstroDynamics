@@ -63,24 +63,68 @@ def run_scenario():
     print("\n[Phase 2: Detailed Mission Planning]")
     
     p_gan, v_gan = engine.get_body_state('ganymede', t_launch)
-    
     dt_sec = dt_days * 86400.0
     t_arr_obj = datetime.fromisoformat(t_launch.replace('Z', '+00:00')) + timedelta(days=dt_days)
     t_arr_iso = t_arr_obj.isoformat().replace('+00:00', 'Z')
-    
     p_io, v_io = engine.get_body_state('io', t_arr_iso)
-    
-    # Lambert
-    v_dep_req, v_arr_pred = planner.calculate_transfer(p_gan, p_io, dt_sec)
-    
-    # Vectors relative to moons
-    v_inf_dep = v_dep_req - np.array(v_gan)
-    v_inf_arr = v_arr_pred - np.array(v_io)
-    
-    v_inf_dep_mag = np.linalg.norm(v_inf_dep)
-    v_inf_arr_mag = np.linalg.norm(v_inf_arr)
-    
+
+    # 3. SETUP LOW ORBIT START
     mu_gan = engine.GM['ganymede']
+    a_park = r_park_dep 
+    T_park = 2 * np.pi * np.sqrt(a_park**3 / mu_gan)
+    
+    print(f"  Parking Orbit (Ganymede): Alt {alt_park}km, Period {T_park/60:.1f} min")
+    
+    # Target Setup State
+    v_dep_req, v_arr_pred = planner.calculate_transfer(p_gan, p_io, dt_sec)
+    v_inf_vec = v_dep_req - np.array(v_gan)
+    
+    # Hyperbolic Injection Geometry
+    # Align periapsis burn with escape asymptote (V_inf)
+    # Turning angle beta: cos(beta) = 1/e
+    v_inf_mag = np.linalg.norm(v_inf_vec)
+    e_hyp = 1.0 + (r_park_dep * v_inf_mag**2) / mu_gan
+    beta = np.arccos(1.0 / e_hyp) 
+    
+    # V_burn direction: Rotate V_inf by -beta (Prograde/Left turn)
+    v_inf_hat = v_inf_vec / v_inf_mag
+    n_vec = np.array([0., 0., 1.])
+    v_perp = np.cross(n_vec, v_inf_hat)
+    
+    v_burn_dir = v_inf_hat * np.cos(beta) - v_perp * np.sin(beta)
+    v_burn_dir /= np.linalg.norm(v_burn_dir)
+    
+    # Position: r x v = h (Z) => r = cross(Z, v)
+    r_burn_dir = np.cross(n_vec, v_burn_dir)
+    r_burn_dir /= np.linalg.norm(r_burn_dir)
+    
+    r_rel_burn = r_burn_dir * r_park_dep
+    v_circ = np.sqrt(mu_gan / r_park_dep)
+    v_rel_burn = v_burn_dir * v_circ
+    
+    state_burn_jup = np.concatenate([
+        np.array(p_gan) + r_rel_burn,
+        np.array(v_gan) + v_rel_burn
+    ])
+    
+    # BACK-PROPAGATE 1.2 Revs
+    t_start_lag = T_park * 1.2
+    t_sim_start_obj = datetime.fromisoformat(t_launch.replace('Z', '+00:00')) - timedelta(seconds=t_start_lag)
+    t_sim_start = t_sim_start_obj.isoformat().replace('+00:00', 'Z')
+    
+    print(f"  Initializing Simulation at {t_sim_start} (T-{t_start_lag/60:.1f} min)")
+    
+    try:
+        back_res = engine.propagate(state_burn_jup.tolist(), t_launch, -t_start_lag)
+        initial_state = back_res 
+    except Exception as e:
+        print(f"  Back-prop failed, using analytical approx: {e}")
+        initial_state = state_burn_jup.tolist()
+    
+    # Costs
+    v_inf_dep_mag = np.linalg.norm(v_inf_vec)
+    v_inf_arr_mag = np.linalg.norm(v_arr_pred - np.array(v_io))
+    
     mu_io = engine.GM['io']
     
     v_esc_dep = np.sqrt(v_inf_dep_mag**2 + 2*mu_gan/r_park_dep)
@@ -96,96 +140,112 @@ def run_scenario():
     print(f"  Total DV: {dv1_mag + dv2_mag:.4f} km/s")
     
     specs = {'mass': 1000.0, 'thrust': 2000.0, 'isp': 3000.0}
-    
-    # 3. EXECUTION
+
+    # 4. EXECUTION
     print("\n[Phase 3: Execution]")
     
-    # Start at safe distance for clean Lambert
-    offset_dist = 20000.0 # km (Reduced for Io/Gan scale? Safe enough)
+    controller.set_initial_state(initial_state, specs['mass'], t_sim_start)
     
-    # Direction: V_inf direction
-    offset_dir = v_inf_dep / np.linalg.norm(v_inf_dep)
+    # Coast 1 Rev
+    print(f"  [Coast] Waiting for optimal window ({t_start_lag/60:.1f} min)...")
+    controller.coast(t_start_lag)
     
-    r_start_sim = np.array(p_gan) + offset_dir * offset_dist
-    
-    # RE-SOLVE Lambert 
-    print(f"  Adjusting forward start point to {offset_dist} km...")
-    v_start_sim, _ = planner.calculate_transfer(r_start_sim, p_io, dt_sec)
-    
-    # Back-propagation
-    print("  Back-propagating escape leg for visualization...")
-    back_state_0 = np.concatenate([r_start_sim, v_start_sim]).tolist()
-    d_back = -0.5 * 86400 
-    t_eval_back = np.linspace(0, d_back, 50)
-    
-    try:
-        states_back = engine.propagate(back_state_0, t_launch, d_back, t_eval=t_eval_back)
-        traj_back = []
-        for s in states_back:
-            traj_back.append(s[:3])
-        traj_back = traj_back[::-1]
-    except Exception as e:
-        print(f"Back-prop failed: {e}")
-        traj_back = []
-
-    # Forward Simulation
-    _, fuel_dep = planner.verify_fuel(dv1_mag, specs['mass'], specs['isp'])
-    mass_after_launch = specs['mass'] - fuel_dep
-    
-    state0 = np.concatenate([r_start_sim, v_start_sim]).tolist()
-    controller.set_initial_state(state0, mass_after_launch, t_launch)
-    
-    # Coast & MCC
-    controller.coast(dt_sec * 0.5)
-    
-    print("Performing MCC...")
+    # DEPARTURE BURN
     curr_pos = controller.get_position()
     curr_vel = controller.get_velocity()
-    # t_now_stats = controller.get_state() # removed invalid call
     
-    t_now = datetime.fromisoformat(controller.time_iso.replace('Z', '+00:00'))
+    # 1. Get required V_inf vector from Lambert (Targeting Io)
+    v_dep_lambert, _ = planner.calculate_transfer(curr_pos, p_io, dt_sec)
+    p_gan_now, v_gan_now = engine.get_body_state('ganymede', t_launch)
+    v_inf_target = v_dep_lambert - np.array(v_gan_now)
+    v_inf_mag = np.linalg.norm(v_inf_target)
+    
+    # 2. Oberth Injection Calculation
+    r_vec = curr_pos - np.array(p_gan_now)
+    r_mag = np.linalg.norm(r_vec)
+    v_inj_mag = np.sqrt(v_inf_mag**2 + 2 * mu_gan / r_mag)
+    
+    # 3. Burn Direction: Tangential (along current relative velocity)
+    # We assume our Beta-angle setup aligned us correctly.
+    v_rel = curr_vel - np.array(v_gan_now)
+    v_rel_hat = v_rel / np.linalg.norm(v_rel)
+    
+    # Target State: V_gan + V_inj_mag * V_rel_hat
+    v_target_inertial = np.array(v_gan_now) + v_rel_hat * v_inj_mag
+    
+    dv_burn = v_target_inertial - curr_vel
+    dv_mag = np.linalg.norm(dv_burn)
+    print(f"  [Maneuver] Executing Departure Burn (Est: {dv_mag*1000:.1f} m/s)")
+    controller.execute_burn(dv_burn, specs['thrust'], specs['isp'], label="Departure Burn")
+    
+    # Coast
+    controller.coast(dt_sec * 0.5)
+    
+    # MCC
+    print("  [Maneuver] Performing MCC...")
+    t_now_mcc = datetime.fromisoformat(controller.time_iso.replace('Z', '+00:00'))
     t_target = datetime.fromisoformat(t_arr_iso.replace('Z', '+00:00'))
-    dt_left = (t_target - t_now).total_seconds()
+    dt_left = (t_target - t_now_mcc).total_seconds()
     
-    v_mcc_req, _ = planner.calculate_transfer(curr_pos, p_io, dt_left)
-    dv_mcc = v_mcc_req - curr_vel
-    
+    curr_pos = controller.get_position()
+    curr_vel = controller.get_velocity()
+    v_req_mcc, _ = planner.calculate_transfer(curr_pos, p_io, dt_left)
+    dv_mcc = v_req_mcc - curr_vel
     controller.execute_burn(dv_mcc, specs['thrust'], specs['isp'], label="MCC")
     
-    # Coast Rest
-    t_now = datetime.fromisoformat(controller.time_iso.replace('Z', '+00:00'))
-    dt_left = (t_target - t_now).total_seconds()
-    controller.coast(dt_left)
+    # Coast to Arrival
+    controller.coast(dt_left - 300)
+    controller.coast(300)
     
-    final_pos = controller.get_position()
-    dist_io = np.linalg.norm(final_pos - np.array(p_io))
+    # ARRIVAL / INSERTION
+    print("\n  [Arrival] Executing Insertion Burn...")
+    curr_pos = controller.get_position()
+    curr_vel = controller.get_velocity()
+    p_io_now, v_io_now = engine.get_body_state('io', controller.time_iso)
     
-    print(f"\nArrival at Io:")
-    print(f"  Distance: {dist_io:.2f} km")
+    r_rel = curr_pos - np.array(p_io_now)
+    dist = np.linalg.norm(r_rel)
+    print(f"    Distance to Io: {dist:.1f} km (Target: {r_park_arr:.1f} km)")
     
+    v_circ_mag = np.sqrt(engine.GM['io'] / dist)
+    
+    v_rel = curr_vel - np.array(v_io_now)
+    h_vec = np.cross(r_rel, v_rel)
+    h_hat = h_vec / np.linalg.norm(h_vec)
+    
+    v_circ_dir = np.cross(h_hat, r_rel)
+    v_circ_dir = v_circ_dir / np.linalg.norm(v_circ_dir)
+    
+    v_target_state = np.array(v_io_now) + v_circ_dir * v_circ_mag
+    dv_insert = v_target_state - curr_vel
+    
+    controller.execute_burn(dv_insert, specs['thrust'], specs['isp'], label="Insertion Burn")
+    
+    # FINAL COAST
+    T_dest = 2 * np.pi * np.sqrt(dist**3 / engine.GM['io'])
+    print(f"  [Coast] Verifying stable orbit ({T_dest/60:.1f} min)...")
+    controller.coast(T_dest)
+    
+    print("\nMission Complete.")
+
     # --- VISUALIZATION ---
     print("\nGenerating Jovian System Plot...")
-    traj_fwd = np.array(controller.trajectory_log)
+    traj = np.array(controller.trajectory_log)
     
-    if len(traj_back) > 0:
-        traj_combined = np.concatenate([traj_back, traj_fwd])
-    else:
-        traj_combined = traj_fwd
-        
     plt.figure(figsize=(10, 10))
     ax = plt.gca()
     
-    ax.plot(traj_combined[:,0], traj_combined[:,1], label='Spacecraft', color='lime', linewidth=1.5)
+    ax.plot(traj[:,0], traj[:,1], label='Spacecraft', color='lime', linewidth=1.5)
     ax.scatter([0], [0], color='orange', s=200, label='Jupiter')
     
-    moons = ['io', 'europa', 'ganymede'] # Focus on inner moons
+    moons = ['io', 'europa', 'ganymede']
     colors = {'io': 'yellow', 'europa': 'brown', 'ganymede': 'gray'}
     
-    start_dt = datetime.fromisoformat(t_launch.replace('Z', '+00:00'))
-    time_len_sec = dt_days * 86400.0
+    start_dt = t_sim_start_obj
+    end_dt = datetime.fromisoformat(controller.time_iso.replace('Z', '+00:00'))
+    total_sec = (end_dt - start_dt).total_seconds()
     
-    # Use finer resolution for moons since Io moves fast
-    time_points = np.linspace(0, time_len_sec, 100)
+    time_points = np.linspace(0, total_sec, 100)
     
     for moon in moons:
         moon_x = []

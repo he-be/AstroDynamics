@@ -37,3 +37,7 @@ Thumbs.db
 
 # Data
 *.bsp
+
+# Generated Scenario Artifacts
+scenario_*.json
+scenario_*.png
