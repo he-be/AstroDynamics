@@ -74,11 +74,11 @@ class JAXPlanner:
                           isp: float,
                           initial_params_guess: np.ndarray = None):
         """
-        Optimizes LTS parameters to reach target_pos at t_start + dt.
+        Optimizes LTS parameters [ax, ay, az, bx, by, bz] to reach target_pos at t_start + dt.
+        Control Law: u(t) = unit(a + b*t)
         """
         
         # 1. Ephemeris
-        # Ensure enough nodes for accuracy. 1 node per hour or so.
         n_nodes = max(50, int(dt_seconds / 3600.0))
         moon_interp = self.prepare_ephemeris(t_start_iso, dt_seconds, nodes=n_nodes)
         
@@ -90,28 +90,55 @@ class JAXPlanner:
         flow_rate = thrust / (isp * g0)
         
         if initial_params_guess is None:
-            init_params = jnp.array([1.0, 0.0, 0.0, 0.0, 0.0, 0.0])
+            # Default: specific direction (e.g. velocity direction) and zero rate
+            # Best guess: unit vector towards target.
+            diff = r_target_jax - y0[0:3]
+            u_guess = diff / jnp.linalg.norm(diff)
+            init_params = jnp.concatenate([u_guess, jnp.array([0.0, 0.0, 0.0])])
         else:
             init_params = jnp.array(initial_params_guess)
             
         # 3. Define Optimization Step
-        
+        # 3. Define Optimization Step
+        # Helper to scale params
+        def unpack_params(p):
+            a = p[0:3]
+            b_norm = p[3:6]
+            b = b_norm / dt_seconds # Scale b so optimization var is O(1)
+            return jnp.concatenate([a, b])
+            
         @eqx.filter_jit
         def loss_fn(opt_params):
-            full_params = jnp.concatenate([opt_params, jnp.array([flow_rate, thrust])])
+            # opt_params: [ax, ay, az, bx_norm, by_norm, bz_norm]
+            scaled_ab = unpack_params(opt_params)
+            
+            full_params = jnp.concatenate([scaled_ab, jnp.array([flow_rate, thrust])])
             sol = self.jax_engine.propagate(
                 state_init=y0, 
                 t_span=(0.0, dt_seconds), 
                 control_params=full_params,
                 moon_interp=moon_interp,
                 steering_mode='linear_tangent',
+                rtol=1e-9, atol=1e-9,
                 max_steps=5000000
             )
             final_state = sol.ys[-1]
             r_final = final_state[0:3]
-            return jnp.sum((r_final - r_target_jax)**2)
+            pos_err = jnp.sum((r_final - r_target_jax)**2)
+            
+            # Regularization: Keep |a| ~ 1.0 to avoid scale drift
+            a_vec = scaled_ab[0:3]
+            reg_err = (jnp.linalg.norm(a_vec) - 1.0)**2
+            
+            return pos_err + 1000.0 * reg_err
 
-        optimizer = optax.adam(learning_rate=1e-2) # Start aggressive
+        # Learning Rate: Decay schedule for fine convergence
+        # 0.05 (0-250), 0.005 (250-500), 0.001 (500+)
+        schedule = optax.piecewise_constant_schedule(
+            init_value=0.05,
+            boundaries_and_scales={250: 0.1, 500: 0.1} 
+        )
+        optimizer = optax.adam(learning_rate=schedule)
         opt_state = optimizer.init(init_params)
         params = init_params
         
@@ -123,44 +150,35 @@ class JAXPlanner:
             return params, opt_state, loss
             
         # 4. Run Loop
-        # Hard limit iterations for safety in this version
-        # Or iterate until convergence
-        print("[JAXPlanner] Starting optimization...")
-        for i in range(100):
+        print("[JAXPlanner] Solving LTS Transfer...")
+        final_err = 0.0
+        
+        for i in range(1000):
             params, opt_state, loss = step(params, opt_state)
             err_km = float(jnp.sqrt(loss))
+            final_err = err_km
             
-            if i % 10 == 0:
-                print(f"  Iter {i}: Error {err_km:.1f} km")
-                
-            if err_km < 100.0: # Convergence Threshold
-                print(f"  Converged at Iter {i}: {err_km:.1f} km")
+            if err_km < 0.1: # Convergence Threshold (Super tight)
+                print(f"  Converged at Iter {i}: {err_km:.3f} km")
                 break
                 
-        # 5. Return result in standard format
-        # Need final state for mass and pos
-        # Use Python propagation once (or evaluate JAX one last time)
+            if i % 100 == 0:
+                print(f"  Iter {i}: Error {err_km:.3f} km")
+                
+        # 5. Return result
+        # Must unscale parameters for external use
+        scaled_ab = unpack_params(params)
+        full_params_out = jnp.concatenate([scaled_ab, jnp.array([flow_rate, thrust])])
         
-        # We need final numpy arrays
-        final_params = np.array(params)
-        
-        # Evaluate final state
-        # We can't easily call 'evaluate' on JIT function without compiling it again if separated.
-        # But we can just use the loss_fn logic or a separate call.
-        # Let's run propagation one last time with correct params outside JIT or inside.
-        
-        # Actually easier to just call jax_engine.propagate again (it's JITted inside the class usually?)
-        # jax_engine.propagate is not JITted by default in the class method, unless wrapped.
-        # But we want to return standard types.
-        
-        full_params = jnp.concatenate([params, jnp.array([flow_rate, thrust])])
-        sol = self.jax_engine.propagate(y0, (0.0, dt_seconds), full_params, moon_interp, steering_mode='linear_tangent')
+        # One last propagation for Exact State
+        sol = self.jax_engine.propagate(y0, (0.0, dt_seconds), full_params_out, moon_interp, steering_mode='linear_tangent')
         final_y = sol.ys[-1]
         
         final_pos = np.array(final_y[0:3])
         final_mass = float(final_y[6])
         
-        return final_params, final_pos, final_mass
+        print(f"  Final LTS Error: {final_err:.1f} km")
+        return np.array(params), final_pos, final_mass
 
     def solve_impulsive_shooting(self, 
                                r_start: list, 
