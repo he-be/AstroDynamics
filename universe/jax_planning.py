@@ -508,4 +508,79 @@ class JAXPlanner:
             })
             
         return result_log
+            
+    def find_optimal_launch_window(self, 
+                                 t_window_start_iso: str, 
+                                 window_duration_days: float, 
+                                 flight_time_days: float,
+                                 dt_step_hours: float = 4.0):
+        """
+        Scans for the optimal launch window using Fast Lambert Solver (CPU/Keplerian).
+        This acts as a geometric filter to find the best phase angle.
+        """
+        from datetime import datetime, timedelta
+        from universe.planning import solve_lambert
+        
+        print(f"Scanning Launch Windows (Lambert Filter, step {dt_step_hours}h)...")
+        
+        if t_window_start_iso.endswith('Z'):
+             iso_clean = t_window_start_iso[:-1] + '+00:00'
+        else:
+             iso_clean = t_window_start_iso
+        base_dt = datetime.fromisoformat(iso_clean)
+        
+        n_steps = int(window_duration_days * 24.0 / dt_step_hours)
+        dt_flight_sec = flight_time_days * 86400.0
+        
+        best_dv = float('inf')
+        best_dt = None
+        best_v_impulse = None
+        
+        mu_jup = self.engine.GM['jupiter']
+        
+        results = []
+        
+        for i in range(n_steps):
+            t_curr = base_dt + timedelta(hours=i*dt_step_hours)
+            t_launch_iso = t_curr.isoformat().replace('+00:00', 'Z')
+            t_arrive_iso = (t_curr + timedelta(days=flight_time_days)).isoformat().replace('+00:00', 'Z')
+            
+            # 1. Get Geometry
+            p_gan, v_gan = self.engine.get_body_state('ganymede', t_launch_iso)
+            p_cal, v_cal = self.engine.get_body_state('callisto', t_arrive_iso)
+            
+            # Launch from 5000km offset (simplified)
+            r_start = np.array(p_gan) + np.array([5000.0, 0.0, 0.0])
+            r_target = np.array(p_cal)
+            
+            # 2. Lambert Solve (Keplerian approximation)
+            try:
+                v_dep, v_arr = solve_lambert(r_start, r_target, dt_flight_sec, mu_jup)
+                
+                # 3. Calculate DV (Departure Delta V from Ganymede velocity)
+                dv = np.linalg.norm(v_dep - np.array(v_gan))
+                
+                results.append((t_curr, dv, v_dep))
+                
+                if dv < best_dv:
+                    best_dv = dv
+                    best_dt = t_curr
+                    best_v_impulse = v_dep
+                    
+            except Exception:
+                pass
+                
+        # Optional: Print top 3
+        results.sort(key=lambda x: x[1])
+        print("Top 3 Windows (Lambert Estimate):")
+        for k in range(min(3, len(results))):
+            t, dv, _ = results[k]
+            print(f"  {t.isoformat()}: ~{dv*1000:.1f} m/s")
+            
+        if best_dt is None:
+             raise ValueError("No valid window found.")
+
+        print(f"Optimal Window Selected: {best_dt.isoformat()} (Lambert DV: {best_dv*1000:.1f} m/s)")
+        
+        return best_dt, jnp.array(best_v_impulse)
 

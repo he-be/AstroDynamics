@@ -127,32 +127,32 @@ class JAXEngine:
         return dynamics
 
     def propagate(self, 
-                 state_init: jnp.ndarray, 
-                 t_span: Tuple[float, float], 
-                 control_params: jnp.ndarray, 
-                 moon_interp: LinearInterpolation,
-                 steering_mode: str = 'constant',
-                 rtol: float = 1e-6, 
-                 atol: float = 1e-6,
-                 max_steps: int = 5000000):
+                 state_init, 
+                 t_span, 
+                 control_params, 
+                 moon_interp, 
+                 steering_mode='constant',
+                 max_steps=5000000,
+                 rtol=1e-6,
+                 atol=1e-6,
+                 throw=True):
         
+        t0, t1 = t_span
+        
+        # Define term immediately
         term = ODETerm(self.get_vector_field(moon_interp, steering_mode))
         solver = Dopri5()
         stepsize_controller = PIDController(rtol=rtol, atol=atol)
         
-        # t parameter handling for LTS?
-        # If simulation starts at t_span[0] != 0, LTS might behavior oddly if not handled.
-        # But for 'segment' optimization we usually start at t=0 relative or absolute time.
-        # We just pass t_span directly.
-        
         sol = diffeqsolve(
-            term, solver, 
-            t0=t_span[0], t1=t_span[1], 
-            dt0=10.0, # Initial step guess
+            term, solver,
+            t0=t0, t1=t1,
+            dt0=10.0,
             y0=state_init,
             args=control_params,
             stepsize_controller=stepsize_controller,
-            max_steps=max_steps
+            max_steps=max_steps,
+            throw=throw
         )
         
         return sol
