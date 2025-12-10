@@ -238,8 +238,37 @@ def run_jax_lts_scenario():
     m_dot = thrust / (ve * 1000.0)
     
     t_burn_ideal = (m_launch * (1.0 - np.exp(-dv_mag/ve))) / m_dot
+    t_burn_ideal = (m_launch * (1.0 - np.exp(-dv_mag/ve))) / m_dot
     t_burn = t_burn_ideal * 1.01 
-    dt_coast = dt_flight_sec - t_burn
+    
+    # 5. Half-Burn Offset Heuristic
+    print(f"Applying Half-Burn Offset: shift start by -{t_burn/2:.1f} s")
+    start_burn_dt = launch_dt_obj - timedelta(seconds=t_burn/2.0)
+    t_start_burn_iso = start_burn_dt.isoformat().replace('+00:00', 'Z')
+    
+    # Propagate from Mission Start to t_start_burn to get precise bounds
+    p0 = parking_log[0]
+    t0_obj = datetime.fromisoformat(p0['time'].replace('Z', '+00:00'))
+    dt_to_burn_start = (start_burn_dt - t0_obj).total_seconds()
+    
+    # Check if dt_to_burn_start is positive
+    if dt_to_burn_start < 0:
+        # Edge case: burn starts before mission start? Unlikely with 10 day wait.
+        dt_to_burn_start = 0.0 # Force start
+    
+    pre_burn_log = jax_planner.evaluate_trajectory(
+        r_start=p0['position'], v_start=p0['velocity'],
+        t_start_iso=p0['time'],
+        dt_seconds=dt_to_burn_start,
+        mass=m_launch,
+        n_steps=100
+    )
+    
+    r_burn_start = pre_burn_log[-1]['position']
+    v_burn_start = pre_burn_log[-1]['velocity']
+    
+    # Coast Duration: dt_flight - t_burn/2
+    dt_coast = dt_flight_sec - t_burn / 2.0
     
     # DEBUG LOGGING
     with open("debug_lts.log", "w") as f:
@@ -248,16 +277,20 @@ def run_jax_lts_scenario():
         f.write(f"Thrust: {thrust} N, Isp: {isp} s\n")
         f.write(f"Ve: {ve:.2f} km/s, Flow Rate: {m_dot:.4f} kg/s\n")
         f.write(f"Burn Time: {t_burn:.2f} s\n")
+        f.write(f"Half-Burn Offset Applied.\n")
+        f.write(f"Launch Time (Impulse): {t_launch_iso}\n")
+        f.write(f"Burn Start Time: {t_start_burn_iso}\n")
         f.write(f"Launch Pos: {r_launch}\n")
+        f.write(f"Burn Start Pos: {r_burn_start}\n")
         f.write(f"Target Pos: {p_cal}\n")
         f.write(f"Impulse Vector: {dv_impulse}\n")
     
     # 5. Solve LTS
     print("Solving Finite Burn...")
     params_lts = jax_planner.solve_finite_burn_coast(
-        r_start=list(r_launch),
-        v_start=list(v_launch),
-        t_start_iso=t_launch_iso,
+        r_start=list(r_burn_start),
+        v_start=list(v_burn_start),
+        t_start_iso=t_start_burn_iso,
         t_burn_seconds=t_burn,
         t_coast_seconds=dt_coast,
         target_pos=list(p_cal),
@@ -269,9 +302,9 @@ def run_jax_lts_scenario():
 
     # 6. Evaluate Burn
     burn_log = jax_planner.evaluate_burn( 
-         r_start=list(r_launch),
-         v_start=list(v_launch),
-         t_start_iso=t_launch_iso,
+         r_start=list(r_burn_start),
+         v_start=list(v_burn_start),
+         t_start_iso=t_start_burn_iso,
          dt_seconds=t_burn,
          lts_params=params_lts,
          thrust=thrust,

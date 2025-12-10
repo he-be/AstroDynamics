@@ -412,7 +412,7 @@ class JAXPlanner:
         # Optimization Loop
         schedule = optax.piecewise_constant_schedule(
             init_value=0.05,
-            boundaries_and_scales={250: 0.1, 500: 0.1}
+            boundaries_and_scales={1000: 0.5, 2000: 0.5}
         )
         optimizer = optax.adam(learning_rate=schedule)
         opt_state = optimizer.init(init_params)
