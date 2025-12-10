@@ -329,7 +329,9 @@ class JAXPlanner:
                               thrust: float, 
                               isp: float,
                               initial_params_guess: np.ndarray = None,
-                              impulse_vector: np.ndarray = None):
+                              impulse_vector: np.ndarray = None,
+                              tol_km: float = 1.0,
+                              max_iter: int = 3000):
         """
         Optimizes LTS parameters for a finite burn followed by a coast phase.
         Global Objective: Hit target_pos at t_start + t_burn + t_coast.
@@ -425,15 +427,16 @@ class JAXPlanner:
             params = optax.apply_updates(params, updates)
             return params, opt_state, loss
 
-        print("[JAXPlanner] Solving Finite Burn + Coast...")
-        for i in range(3000):
+        print(f"[JAXPlanner] Solving Finite Burn + Coast (Target: {tol_km} km)...")
+        for i in range(max_iter):
             params, opt_state, loss = step(params, opt_state)
             err_km = float(jnp.sqrt(loss)) 
             
-            if i % 50 == 0:
+            if i % 100 == 0:
                 print(f"  Iter {i}: LossSq {err_km:.1f}")
                 
-            if err_km < 1.0: 
+            if err_km < tol_km:
+                 print(f"  Converged at Iter {i}: {err_km:.1f} km")
                  break
         
         return np.array(params)
