@@ -20,7 +20,7 @@ def run_jax_lts_scenario():
     jax_planner = JAXPlanner(engine)
     
     # 1. Mission Context
-    mission_start_iso = "2025-03-10T12:00:00Z"
+    mission_start_iso = "2025-06-29T12:00:00Z"
     flight_time_days = 4.0
     scan_window_days = 20.0
     
@@ -347,120 +347,189 @@ def run_jax_lts_scenario():
     
     # Solve Lambert for MCC
     try:
+        # --- EVALUATION 1: Initial Burn Accuracy ---
+        print("  [Evaluation] Checking Initial Burn Accuracy...")
+        t_end_burn_obj = datetime.fromisoformat(end_burn['time'].replace('Z', '+00:00'))
+        dt_check_1 = (t_arr_obj - t_end_burn_obj).total_seconds()
+        check_1_log = jax_planner.evaluate_trajectory(
+            r_start=end_burn['position'], v_start=end_burn['velocity'],
+            t_start_iso=end_burn['time'], dt_seconds=dt_check_1,
+            mass=end_burn['mass'], n_steps=100
+        )
+        r_check_1 = np.array(check_1_log[-1]['position'])
+        err_1 = np.linalg.norm(r_check_1 - np.array(p_cal_arr))
+        print(f"  Initial Burn Residual Error: {err_1:.1f} km")
+
+        # Solve Lambert for MCC (Estimate)
         v_mcc_dep, _ = solve_lambert(r_mcc, np.array(p_cal_arr), dt_remaining, mu_jup)
-        dv_mcc_vec = v_mcc_dep - v_mcc
-        dv_mcc_mag = np.linalg.norm(dv_mcc_vec)
-        print(f"  MCC Delta-V: {dv_mcc_mag*1000:.2f} m/s")
+        dv_est = v_mcc_dep - v_mcc
+        dv_mag_est = np.linalg.norm(dv_est)
+        print(f"  MCC Est Delta-V: {dv_mag_est*1000:.2f} m/s")
         
-        # Calculate Burn Time for MCC
+        # Estimate Burn Time
         m_dot = thrust / (ve * 1000.0)
-        t_burn_mcc = (m_mcc * (1.0 - np.exp(-dv_mcc_mag/ve))) / m_dot
-        t_burn_mcc *= 1.1 # Margin
+        t_burn_mcc = (m_mcc * (1.0 - np.exp(-dv_mag_est/ve))) / m_dot
+        if t_burn_mcc < 1.0: t_burn_mcc = 1.0
         
-        if t_burn_mcc < 1.0: t_burn_mcc = 1.0 # Min duration
+        # --- HEURISTIC: Half-Burn Offset & Re-Targeting (N-Body) ---
+        print("  [Heuristic] Applying Half-Burn Offset & N-Body Optimization for TCM-1...")
+        t_mcc_start_obj = t_mcc_obj - timedelta(seconds=t_burn_mcc/2.0)
+        t_mcc_start_iso = t_mcc_start_obj.isoformat().replace('+00:00', 'Z')
         
-        print(f"  MCC Burn Time: {t_burn_mcc:.2f} s")
+        # Re-Propagate Coast 1 to start time
+        dt_coast1_rev = (t_mcc_start_obj - t_burn_end_obj).total_seconds()
         
-        # Solve Finite Burn for MCC (Refinement)
-        dt_coast2 = dt_remaining - t_burn_mcc
+        coast1_log = jax_planner.evaluate_trajectory(
+            r_start=end_burn['position'], v_start=end_burn['velocity'],
+            t_start_iso=end_burn['time'], dt_seconds=dt_coast1_rev,
+            mass=end_burn['mass'], n_steps=100
+        )
+        state_burn_start = coast1_log[-1]
+        r_start = list(state_burn_start['position'])
+        v_start = list(state_burn_start['velocity'])
+        m_start = state_burn_start['mass']
+        
+        # Solve Finite Burn (Optimizer handles N-Body)
+        dt_coast2_est = (t_arr_obj - (t_mcc_start_obj + timedelta(seconds=t_burn_mcc))).total_seconds()
         
         params_mcc = jax_planner.solve_finite_burn_coast(
-            r_start=list(r_mcc),
-            v_start=list(v_mcc),
-            t_start_iso=t_mcc_iso,
+            r_start=r_start, v_start=v_start,
+            t_start_iso=t_mcc_start_iso,
             t_burn_seconds=t_burn_mcc,
-            t_coast_seconds=dt_coast2,
+            t_coast_seconds=dt_coast2_est,
             target_pos=list(p_cal_arr),
-            mass_init=m_mcc,
-            thrust=thrust,
-            isp=isp,
-            impulse_vector=dv_mcc_vec
+            mass_init=m_start,
+            thrust=thrust, isp=isp,
+            impulse_vector=dv_est # Seed
         )
         
-        # Execute MCC Burn
+        # Execute
         mcc_burn_log = jax_planner.evaluate_burn(
-             r_start=list(r_mcc),
-             v_start=list(v_mcc),
-             t_start_iso=t_mcc_iso,
+             r_start=r_start, v_start=v_start,
+             t_start_iso=t_mcc_start_iso,
              dt_seconds=t_burn_mcc,
              lts_params=params_mcc,
-             thrust=thrust,
-             isp=isp,
-             mass_init=m_mcc
+             thrust=thrust, isp=isp, mass_init=m_start
         )
-        
-        # Execute Final Coast (Coast 2 -> TCM-2)
         end_mcc = mcc_burn_log[-1]
         
-        # TCM-2 Strategy: 90% of flight time
-        t_tcm2_obj = launch_dt_obj + timedelta(seconds=dt_flight_sec * 0.9)
-        t_tcm2_iso = t_tcm2_obj.isoformat().replace('+00:00', 'Z')
-        t_mcc_end_obj = datetime.fromisoformat(end_mcc['time'].replace('Z', '+00:00'))
-        dt_coast2 = (t_tcm2_obj - t_mcc_end_obj).total_seconds()
-        
-        print(f"Propagating Coast 2 (to TCM-2): {dt_coast2/3600:.2f} hours")
-        
-        coast2_log = jax_planner.evaluate_trajectory(
-            r_start=end_mcc['position'],
-            v_start=end_mcc['velocity'],
-            t_start_iso=end_mcc['time'],
-            dt_seconds=dt_coast2,
-            mass=end_mcc['mass'],
-            n_steps=100
+        # --- EVALUATION 2: TCM-1 Accuracy ---
+        print("  [Evaluation] Checking TCM-1 Accuracy...")
+        t_end_mcc_obj = datetime.fromisoformat(end_mcc['time'].replace('Z', '+00:00'))
+        dt_check_2 = (t_arr_obj - t_end_mcc_obj).total_seconds()
+        check_2_log = jax_planner.evaluate_trajectory(
+            r_start=end_mcc['position'], v_start=end_mcc['velocity'],
+            t_start_iso=end_mcc['time'], dt_seconds=dt_check_2,
+            mass=end_mcc['mass'], n_steps=100
         )
+        r_check_2 = np.array(check_2_log[-1]['position'])
+        err_2 = np.linalg.norm(r_check_2 - np.array(p_cal_arr))
+        print(f"  TCM-1 Residual Error: {err_2:.1f} km")
         
-        state_tcm2 = coast2_log[-1]
+    except Exception as e:
+        print(f"MCC Failed: {e}")
+        full_log = parking_log + burn_log + coast1_log
+        last_state = coast1_log[-1]
+
+    # 7b. TCM-2 Setup
+    # TCM-2 Strategy: 90% of flight time
+    t_tcm2_obj = launch_dt_obj + timedelta(seconds=dt_flight_sec * 0.9)
+    
+    # Propagate Coast 2 to TCM-2 Center (Guess)
+    t_mcc_end_obj = datetime.fromisoformat(end_mcc['time'].replace('Z', '+00:00'))
+    dt_coast2_guess = (t_tcm2_obj - t_mcc_end_obj).total_seconds()
+    
+    coast2_log = jax_planner.evaluate_trajectory(
+        r_start=end_mcc['position'], v_start=end_mcc['velocity'],
+        t_start_iso=end_mcc['time'], dt_seconds=dt_coast2_guess,
+        mass=end_mcc['mass'], n_steps=100
+    )
+    state_tcm2 = coast2_log[-1]
+    
+    try:
         r_tcm2 = np.array(state_tcm2['position'])
         v_tcm2 = np.array(state_tcm2['velocity'])
         m_tcm2 = state_tcm2['mass']
         
-        print(f"Designing TCM-2 at {t_tcm2_iso}...")
-        
+        # Solve Lambert Estimate
         dt_rem_2 = (t_arr_obj - t_tcm2_obj).total_seconds()
+        v_mcc_dep, _ = solve_lambert(r_tcm2, np.array(p_cal_arr), dt_rem_2, mu_jup)
+        dv_est_2 = v_mcc_dep - v_tcm2
+        dv_mag_est_2 = np.linalg.norm(dv_est_2)
+        print(f"  TCM-2 Est Delta-V: {dv_mag_est_2*1000:.2f} m/s")
         
-        try:
-             v_tcm2_dep, _ = solve_lambert(r_tcm2, np.array(p_cal_arr), dt_rem_2, mu_jup)
-             dv_tcm2_vec = v_tcm2_dep - v_tcm2
-             dv_tcm2 = np.linalg.norm(dv_tcm2_vec)
-             print(f"  TCM-2 Delta-V: {dv_tcm2*1000:.2f} m/s")
-             
-             # Finite Burn TCM-2
-             m_dot = thrust / (ve * 1000.0)
-             t_burn_2 = (m_tcm2 * (1.0 - np.exp(-dv_tcm2/ve))) / m_dot * 1.1
-             if t_burn_2 < 1.0: t_burn_2 = 1.0
-             
-             dt_coast3 = dt_rem_2 - t_burn_2
-             
-             params_tcm2 = jax_planner.solve_finite_burn_coast(
-                 r_start=list(r_tcm2), v_start=list(v_tcm2),
-                 t_start_iso=t_tcm2_iso, t_burn_seconds=t_burn_2, t_coast_seconds=dt_coast3,
-                 target_pos=list(p_cal_arr), mass_init=m_tcm2,
-                 thrust=thrust, isp=isp, impulse_vector=dv_tcm2_vec
-             )
-             
-             tcm2_log = jax_planner.evaluate_burn(
-                 r_start=list(r_tcm2), v_start=list(v_tcm2),
-                 t_start_iso=t_tcm2_iso, dt_seconds=t_burn_2,
-                 lts_params=params_tcm2, thrust=thrust, isp=isp, mass_init=m_tcm2
-             )
-             
-             # Final Coast
-             end_tcm2 = tcm2_log[-1]
-             coast3_log = jax_planner.evaluate_trajectory(
-                 r_start=end_tcm2['position'], v_start=end_tcm2['velocity'],
-                 t_start_iso=end_tcm2['time'], dt_seconds=dt_coast3,
-                 mass=end_tcm2['mass'], n_steps=50
-             )
-             
-             full_log = parking_log + burn_log + coast1_log + mcc_burn_log + coast2_log + tcm2_log + coast3_log
-             last_state = coast3_log[-1]
-             
-        except Exception as e:
-             print(f"TCM-2 Failed: {e}")
-             full_log = parking_log + burn_log + coast1_log + mcc_burn_log + coast2_log
-             last_state = coast2_log[-1]
+        # Estimate Burn Time
+        m_dot = thrust / (ve * 1000.0)
+        t_burn_est_2 = (m_tcm2 * (1.0 - np.exp(-dv_mag_est_2/ve))) / m_dot
+        if t_burn_est_2 < 1.0: t_burn_est_2 = 1.0
+        
+        # --- HEURISTIC: Half-Burn Offset & Re-Targeting (N-Body) ---
+        print("  [Heuristic] Applying Half-Burn Offset & N-Body Optimization for TCM-2...")
+        t_tcm2_start_obj = t_tcm2_obj - timedelta(seconds=t_burn_est_2/2.0)
+        t_tcm2_start_iso = t_tcm2_start_obj.isoformat().replace('+00:00', 'Z')
+        
+        # Re-Propagate Coast 2 to start time
+        dt_coast2_rev = (t_tcm2_start_obj - t_mcc_end_obj).total_seconds()
+        
+        coast2_log = jax_planner.evaluate_trajectory(
+            r_start=end_mcc['position'], v_start=end_mcc['velocity'],
+            t_start_iso=end_mcc['time'], dt_seconds=dt_coast2_rev,
+            mass=end_mcc['mass'], n_steps=100
+        )
+        state_tcm2_start = coast2_log[-1]
+        r_start_2 = list(state_tcm2_start['position'])
+        v_start_2 = list(state_tcm2_start['velocity'])
+        m_start_2 = state_tcm2_start['mass']
+        
+        # Optimze TCM-2
+        dt_coast3_est = (t_arr_obj - (t_tcm2_start_obj + timedelta(seconds=t_burn_est_2))).total_seconds()
+        
+        params_tcm2 = jax_planner.solve_finite_burn_coast(
+            r_start=r_start_2, v_start=v_start_2,
+            t_start_iso=t_tcm2_start_iso,
+            t_burn_seconds=t_burn_est_2,
+            t_coast_seconds=dt_coast3_est,
+            target_pos=list(p_cal_arr),
+            mass_init=m_start_2,
+            thrust=thrust, isp=isp,
+            impulse_vector=dv_est_2
+        )
+        
+        tcm2_burn_log = jax_planner.evaluate_burn(
+            r_start=r_start_2, v_start=v_start_2,
+            t_start_iso=t_tcm2_start_iso,
+            dt_seconds=t_burn_est_2,
+            lts_params=params_tcm2,
+            thrust=thrust, isp=isp, mass_init=m_start_2
+        )
+        
+        # Final Coast
+        end_tcm2 = tcm2_burn_log[-1]
+        dt_coast3 = (t_arr_obj - (t_tcm2_start_obj + timedelta(seconds=t_burn_est_2))).total_seconds()
+        
+        coast3_log = jax_planner.evaluate_trajectory(
+            r_start=end_tcm2['position'], v_start=end_tcm2['velocity'],
+            t_start_iso=end_tcm2['time'], dt_seconds=dt_coast3,
+            mass=end_tcm2['mass'], n_steps=50
+        )
+        
+        full_log = parking_log + burn_log + coast1_log + mcc_burn_log + coast2_log + tcm2_burn_log + coast3_log
+        last_state = coast3_log[-1]
+        
+        # --- EVALUATION 3: TCM-2 Accuracy (Final) ---
+        print("  [Evaluation] Checking TCM-2 Accuracy...")
+        # (This is just coast3_log[-1], no need to re-propagate)
+        err_final_calc = np.linalg.norm(np.array(last_state['position']) - np.array(p_cal_arr))
+        print(f"  TCM-2 Residual Error: {err_final_calc:.1f} km")
         
     except Exception as e:
+         print(f"TCM-2 Failed: {e}")
+         # Attempt to salvage logs
+         try: full_log = parking_log + burn_log + coast1_log + mcc_burn_log + coast2_log
+         except: full_log = parking_log + burn_log
+         last_state = coast2_log[-1] # Corrected from end_burnoast2_log[-1]
+        
+    except Exception as e: # This is the outer MCC try-except block
         print(f"MCC Failed: {e}")
         # Fallback to single coast
         full_log = parking_log + burn_log + coast1_log

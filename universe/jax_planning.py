@@ -266,7 +266,7 @@ class JAXPlanner:
         Propagates the trajectory using JAX Engine and returns sampled points for visualization.
         """
         # 1. Ephemeris
-        n_nodes = max(500, int(dt_seconds / 120.0))
+        n_nodes = max(1000, int(dt_seconds / 10.0))
         moon_interp = self.prepare_ephemeris(t_start_iso, dt_seconds, nodes=n_nodes)
         
         # 2. Setup
@@ -451,7 +451,7 @@ class JAXPlanner:
         """
         Propagates a finite burn trajectory using JAX Engine.
         """
-        n_nodes = max(500, int(dt_seconds / 120.0))
+        n_nodes = max(1000, int(dt_seconds / 10.0))
         moon_interp = self.prepare_ephemeris(t_start_iso, dt_seconds, nodes=n_nodes)
         
         y0 = jnp.concatenate([jnp.array(r_start), jnp.array(v_start), jnp.array([mass_init])])
@@ -474,7 +474,7 @@ class JAXPlanner:
         
         term = ODETerm(self.jax_engine.get_vector_field(moon_interp, 'linear_tangent'))
         solver = Dopri5()
-        stepsize_controller = PIDController(rtol=1e-6, atol=1e-6)
+        stepsize_controller = PIDController(rtol=1e-9, atol=1e-9)
         
         sol = diffeqsolve(
             term, solver,
