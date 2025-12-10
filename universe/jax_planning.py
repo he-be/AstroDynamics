@@ -285,10 +285,13 @@ class JAXPlanner:
         solver = Dopri5()
         stepsize_controller = PIDController(rtol=1e-9, atol=1e-9)
         
+        # Ensure dt0 matches direction of propagation
+        dt0_sign = 1.0 if dt_seconds >= 0 else -1.0
+        
         sol = diffeqsolve(
             term, solver,
             t0=0.0, t1=dt_seconds,
-            dt0=10.0,
+            dt0=10.0 * dt0_sign,
             y0=y0,
             args=control_params,
             stepsize_controller=stepsize_controller,
