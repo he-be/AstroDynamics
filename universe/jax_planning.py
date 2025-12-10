@@ -120,7 +120,7 @@ class JAXPlanner:
                 moon_interp=moon_interp,
                 steering_mode='linear_tangent',
                 rtol=1e-9, atol=1e-9,
-                max_steps=5000000
+                max_steps=1000000
             )
             final_state = sol.ys[-1]
             r_final = final_state[0:3]
@@ -278,7 +278,7 @@ class JAXPlanner:
         
         term = ODETerm(self.jax_engine.get_vector_field(moon_interp, 'constant'))
         solver = Dopri5()
-        stepsize_controller = PIDController(rtol=1e-6, atol=1e-6)
+        stepsize_controller = PIDController(rtol=1e-9, atol=1e-9)
         
         sol = diffeqsolve(
             term, solver,
@@ -335,9 +335,9 @@ class JAXPlanner:
         Global Objective: Hit target_pos at t_start + t_burn + t_coast.
         """
         
-        # 1. Ephemeris (Need coverage for burn + coast)
+        # 1. Ephemeris (High Res for MCC Precision)
         total_dt = t_burn_seconds + t_coast_seconds
-        n_nodes = max(500, int(total_dt / 120.0))
+        n_nodes = max(1000, int(total_dt / 10.0))
         moon_interp = self.prepare_ephemeris(t_start_iso, total_dt, nodes=n_nodes)
         
         # 2. Setup
@@ -380,7 +380,7 @@ class JAXPlanner:
                 control_params=full_params_burn,
                 moon_interp=moon_interp,
                 steering_mode='linear_tangent',
-                rtol=1e-6, atol=1e-6,
+                rtol=1e-9, atol=1e-9,
                 max_steps=1000000
             )
             state_burn_end = sol_burn.ys[-1]
@@ -395,7 +395,7 @@ class JAXPlanner:
                 control_params=zero_convex,
                 moon_interp=moon_interp,
                 steering_mode='constant',
-                rtol=1e-6, atol=1e-6,
+                rtol=1e-9, atol=1e-9,
                 max_steps=1000000
             )
             
@@ -433,7 +433,7 @@ class JAXPlanner:
             if i % 50 == 0:
                 print(f"  Iter {i}: LossSq {err_km:.1f}")
                 
-            if err_km < 100.0: 
+            if err_km < 1.0: 
                  break
         
         return np.array(params)
