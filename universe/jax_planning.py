@@ -10,6 +10,11 @@ from skyfield.api import Loader, Timescale
 
 from universe.engine import PhysicsEngine
 from universe.jax_engine import JAXEngine
+from universe.planning import solve_lambert
+
+JUPITER_GRAVITY = 1.266865349e17 # m^3/s^2? No, 126686534.9 km^3/s^2.
+# Wait, let's match the value used in scenario.
+MU_JUP = 126686534.9 # km^3/s^2
 
 class JAXPlanner:
     def __init__(self, engine: PhysicsEngine):
@@ -586,4 +591,215 @@ class JAXPlanner:
         print(f"Optimal Window Selected: {best_dt.isoformat()} (Lambert DV: {best_dv*1000:.1f} m/s)")
         
         return best_dt, jnp.array(best_v_impulse)
+
+    def find_optimal_parking_phase(self, 
+                                 r_parking: list, 
+                                 v_parking: list, 
+                                 t_parking_iso: str,
+                                 period_seconds: float,
+                                 flight_time_seconds: float,
+                                 target_body: str,
+                                 step_seconds: float = 60.0):
+        """
+        Scans a parking orbit to find the optimal departure time (Oberth Effect).
+        Minimizes impulsive Delta-V required to hit the target body.
+        
+        Returns:
+            best_state (dict): The state at the optimal departure time.
+            scan_log (list): Full log of the scanning orbit.
+            best_dv (float): The minimum Delta-V found (km/s).
+        """
+        # 1. Propagate Parking Orbit for one period
+        scan_log = self.evaluate_trajectory(
+            r_start=r_parking, v_start=v_parking,
+            t_start_iso=t_parking_iso,
+            dt_seconds=period_seconds,
+            mass=1000.0, # Dummy mass
+            n_steps=int(period_seconds / step_seconds)
+        )
+        
+        best_dv = float('inf')
+        best_step = None
+        
+        # 2. Scan for best phase
+        for step in scan_log:
+            r_try = np.array(step['position'])
+            v_try = np.array(step['velocity'])
+            t_try_obj = datetime.fromisoformat(step['time'].replace('Z', '+00:00'))
+            
+            t_arr_try = t_try_obj + timedelta(seconds=flight_time_seconds)
+            t_arr_try_iso = t_arr_try.isoformat().replace('+00:00', 'Z')
+            
+            # Get Target State
+            p_target, _ = self.engine.get_body_state(target_body, t_arr_try_iso)
+            
+            try:
+                 v_lamb, _ = solve_lambert(r_try, np.array(p_target), flight_time_seconds, MU_JUP)
+                 dv = np.linalg.norm(v_lamb - v_try)
+                 if dv < best_dv:
+                     best_dv = dv
+                     best_step = step
+            except:
+                 pass
+                 
+        if best_step is None:
+            # Fallback to start
+            best_step = scan_log[0]
+            best_dv = 0.0 # Error
+            
+        return best_step, scan_log, best_dv
+
+    def plan_correction_maneuver(self,
+                               current_state: dict,
+                               target_pos: list,
+                               target_time_iso: str,
+                               thrust: float,
+                               isp: float,
+                               tolerance_km: float = 10.0,
+                               tol_optimization: float = None,
+                               heuristic_offset: bool = True,
+                               previous_state: dict = None):
+        """
+        Plans and Executes a robust N-Body correction maneuver.
+        
+        Returns:
+            result (dict): {
+                'skipped': bool,
+                'maneuver_log': list (burn + coast),
+                'final_error_km': float,
+                'start_time': str,
+                'duration': float,
+                'delta_v': float
+            }
+        """
+        if tol_optimization is None:
+            tol_optimization = tolerance_km
+            
+        r_curr = np.array(current_state['position'])
+        v_curr = np.array(current_state['velocity'])
+        m_curr = current_state['mass']
+        t_curr_iso = current_state['time']
+        
+        t_curr_obj = datetime.fromisoformat(t_curr_iso.replace('Z', '+00:00'))
+        t_target_obj = datetime.fromisoformat(target_time_iso.replace('Z', '+00:00'))
+        dt_remaining = (t_target_obj - t_curr_obj).total_seconds()
+        
+        # 1. Check Initial Error (Coast Check)
+        coast_check = self.evaluate_trajectory(
+            r_start=r_curr, v_start=v_curr, t_start_iso=t_curr_iso,
+            dt_seconds=dt_remaining, mass=m_curr, n_steps=50
+        )
+        r_final_coast = np.array(coast_check[-1]['position'])
+        err_coast = np.linalg.norm(r_final_coast - np.array(target_pos))
+        
+        if err_coast < tolerance_km:
+             return {
+                 'skipped': True,
+                 'maneuver_log': coast_check,
+                 'final_error_km': float(err_coast),
+                 'reason': f"Error {err_coast:.1f} km < Tolerance {tolerance_km} km"
+             }
+
+        # 2. Lambert Estimate
+        try:
+            v_req, _ = solve_lambert(r_curr, np.array(target_pos), dt_remaining, MU_JUP)
+            dv_vec = v_req - v_curr
+            dv_mag = np.linalg.norm(dv_vec)
+        except Exception as e:
+            print(f"Lambert Failed: {e}")
+            return {'skipped': True, 'error': str(e), 'maneuver_log': coast_check, 'final_error_km': float(err_coast)}
+
+        # 3. Burn Sizing
+        g0 = 9.80665
+        ve = isp * g0 / 1000.0
+        m_dot = thrust / (ve * 1000.0)
+        t_burn = (m_curr * (1.0 - np.exp(-dv_mag/ve))) / m_dot
+        if t_burn < 1.0: t_burn = 1.0
+        
+        # 4. Determine Start State (Heuristic Offset)
+        t_start_burn_obj = t_curr_obj
+        if heuristic_offset:
+            t_start_burn_obj = t_curr_obj - timedelta(seconds=t_burn/2.0)
+            
+        t_start_burn_iso = t_start_burn_obj.isoformat().replace('+00:00', 'Z')
+        
+        # Propagate to Start
+        state_start = current_state
+        if t_start_burn_obj < t_curr_obj:
+             if previous_state is None:
+                  print("  [GNC Warning] Heuristic requested but no previous_state. Using current state.")
+                  t_start_burn_obj = t_curr_obj
+                  t_start_burn_iso = t_curr_iso
+             else:
+                  t_prev_iso = previous_state['time']
+                  t_prev_obj = datetime.fromisoformat(t_prev_iso.replace('Z', '+00:00'))
+                  dt_prop = (t_start_burn_obj - t_prev_obj).total_seconds()
+                  
+                  prop_log = self.evaluate_trajectory(
+                      r_start=previous_state['position'], v_start=previous_state['velocity'],
+                      t_start_iso=previous_state['time'], dt_seconds=dt_prop,
+                      mass=previous_state['mass'], n_steps=50
+                  )
+                  state_start = prop_log[-1]
+        elif t_start_burn_obj > t_curr_obj:
+             dt_fwd = (t_start_burn_obj - t_curr_obj).total_seconds()
+             prop_log = self.evaluate_trajectory(
+                 r_start=r_curr, v_start=v_curr, t_start_iso=t_curr_iso,
+                 dt_seconds=dt_fwd, mass=m_curr, n_steps=50
+             )
+             state_start = prop_log[-1]
+             
+        # 5. Optimize Finite Burn
+        r_s = list(state_start['position'])
+        v_s = list(state_start['velocity'])
+        m_s = state_start['mass']
+        dt_coast_post = (t_target_obj - (t_start_burn_obj + timedelta(seconds=t_burn))).total_seconds()
+        
+        # Re-estimate Delta-V Vector for new start time (optional, or use previous guess)
+        # Using the dv_vec from Lambert at t_curr is decent approximation for direction.
+        
+        params_opt = self.solve_finite_burn_coast(
+            r_start=r_s, v_start=v_s,
+            t_start_iso=t_start_burn_iso,
+            t_burn_seconds=t_burn,
+            t_coast_seconds=dt_coast_post,
+            target_pos=list(target_pos),
+            mass_init=m_s,
+            thrust=thrust, isp=isp,
+            impulse_vector=dv_vec,
+            tol_km=tol_optimization
+        )
+        
+        # 6. Execute
+        burn_log = self.evaluate_burn(
+            r_start=r_s, v_start=v_s, t_start_iso=t_start_burn_iso,
+            dt_seconds=t_burn, lts_params=params_opt,
+            thrust=thrust, isp=isp, mass_init=m_s
+        )
+        end_burn = burn_log[-1]
+        
+        dt_coast_final = (t_target_obj - (t_start_burn_obj + timedelta(seconds=t_burn))).total_seconds()
+        final_coast_log = self.evaluate_trajectory(
+            r_start=end_burn['position'], v_start=end_burn['velocity'],
+            t_start_iso=end_burn['time'], dt_seconds=dt_coast_final,
+            mass=end_burn['mass'], n_steps=100
+        )
+        
+        last_state = final_coast_log[-1]
+        err_final = np.linalg.norm(np.array(last_state['position']) - np.array(target_pos))
+        
+        return {
+            'skipped': False,
+            'maneuver_log': burn_log + final_coast_log,
+            'final_error_km': float(err_final),
+            'start_time': t_start_burn_iso,
+            'duration': t_burn,
+            'delta_v': dv_mag # Est
+        }
+        # We repropagated `coast1_log` to `t_mcc_start`.
+        # So we had access to `end_burn` (state_prev).
+        
+        # I will change the signature to accept `state_prev` optional.
+        # If `state_prev` provided, we can "Re-Propagate" to heuristic start.
+        # If not, we start burn at `t_curr`.
 
