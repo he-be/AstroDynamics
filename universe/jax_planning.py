@@ -192,8 +192,8 @@ class JAXPlanner:
                                r_target: list,
                                initial_v_guess: list = None):
         """
-        Solves for the initial velocity to reach r_target after dt_seconds using N-Body dynamics (Shooting method).
-        Effectively a high-fidelity Lambert solver.
+        Solves for the initial velocity to reach r_target after dt_seconds using Differential Correction (Newton-Raphson).
+        Target Function: F(v_dep) = r_actual(t_f) - r_target = 0
         """
         # 1. Ephemeris
         n_nodes = max(500, int(dt_seconds / 120.0))
@@ -205,60 +205,64 @@ class JAXPlanner:
         mass_dummy = 1000.0
         
         if initial_v_guess is None:
+            # Linear guess if no Lambert provided
             v_guess = (rt - r0) / dt_seconds
         else:
             v_guess = jnp.array(initial_v_guess)
             
-        # 3. Loss Function
+        print("[JAXPlanner] Starting Differential Correction (Newton-Raphson)...")
+        # print(f"  Target: {rt}")
+        
+        # 3. Residual Function
         @eqx.filter_jit
-        def shooting_loss(v_in):
-            y0 = jnp.concatenate([r0, v_in, jnp.array([mass_dummy])])
-            # Coasting (No Thrust)
-            # Control params: [0,0,0, 0] (const steering, flow=0)
-            zero_ctrl = jnp.zeros(4) 
-            
-            # Using 'constant' steering with 0 thrust results in ballistic trajectory
-            sol = self.jax_engine.propagate(
+        def residual_fn(v_in):
+             y0 = jnp.concatenate([r0, v_in, jnp.array([mass_dummy])])
+             zero_ctrl = jnp.zeros(4) 
+             sol = self.jax_engine.propagate(
                 state_init=y0,
                 t_span=(0.0, dt_seconds),
                 control_params=zero_ctrl,
                 moon_interp=moon_interp,
                 steering_mode='constant',
                 max_steps=5000000
-            )
-            r_final = sol.ys[-1][0:3]
-            return jnp.sum((r_final - rt)**2)
-            
-        # 4. Optimization
-        # 4. Optimization
-        # Use simple Adam with Schedule
-        schedule = optax.piecewise_constant_schedule(
-            init_value=0.1,
-            boundaries_and_scales={500: 0.1, 1000: 0.1}
-        )
-        optimizer = optax.adam(learning_rate=schedule)
-        opt_state = optimizer.init(v_guess)
-        params = v_guess
+             )
+             r_final = sol.ys[-1][0:3]
+             return r_final - rt
+             
+        # 4. Jacobian Function (Automatic Differentiation)
+        # Jacobian J = d(residual)/d(v_in)
+        jacobian_fn = jax.jacrev(residual_fn)
         
-        @eqx.filter_jit
-        def step(params, opt_state):
-            loss, grads = jax.value_and_grad(shooting_loss)(params)
-            updates, opt_state = optimizer.update(grads, opt_state, params)
-            params = optax.apply_updates(params, updates)
-            return params, opt_state, loss
-
-        print("[JAXPlanner] Solving Impulsive Shooting...")
-        for i in range(2000):
-            params, opt_state, loss = step(params, opt_state)
-            err_km = float(jnp.sqrt(loss))
-            if err_km < 1.0: # Tight tolerance for shooting
-                print(f"  Converged at Iter {i}: {err_km:.3f} km")
-                break
-            if i % 100 == 0:
-                 print(f"  Iter {i}: Error {err_km:.1f} km")
-                
-        print(f"  Final Error: {err_km:.3f} km")
-        return np.array(params)
+        # 5. Iteration Loop
+        v_curr = v_guess
+        
+        for i in range(20): # Newton converges quadratically usually
+             res = residual_fn(v_curr)
+             err_km = jnp.linalg.norm(res)
+             
+             print(f"  Iter {i}: Error {err_km:.3f} km")
+             
+             if err_km < 1.0: # 10 km target tolerance
+                 print(f"  Converged! Final Error: {err_km:.3f} km")
+                 break
+             
+             # Compute Jacobian
+             J = jacobian_fn(v_curr)
+             
+             # Newton Step: v_new = v_curr - J^-1 * res
+             # Use robust solver
+             try:
+                 delta_v = jnp.linalg.solve(J, res)
+                 # Damped Newton
+                 v_curr = v_curr - 1.0 * delta_v
+             except:
+                 print("  Singular Jacobian! Optimization Failed.")
+                 break
+                 
+             if i == 19:
+                 print("  Max iterations reached.")
+        
+        return np.array(v_curr)
 
     def evaluate_trajectory(self, 
                           r_start: list, 

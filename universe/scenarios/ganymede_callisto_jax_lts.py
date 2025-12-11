@@ -62,18 +62,65 @@ def run_jax_lts_scenario():
     else:
         print("TCM-1 Sufficient. Skipping TCM-2.")
     
-    # 7. Collect Data for Plotting
+    # 7. Propagate Past Arrival (Grazing Analysis)
+    print("Propagating past arrival to find Periapsis...")
+    
+    # Get last state
+    last_log = transfer.logs[-1][-1]
+    
+    # Propagate for 1 more day
+    extra_coast_sec = 86400.0 
+    final_coast = jax_planner.evaluate_trajectory(
+        r_start=last_log['position'], v_start=last_log['velocity'],
+        t_start_iso=last_log['time'], dt_seconds=extra_coast_sec,
+        mass=last_log['mass'], n_steps=200
+    )
+    transfer.logs.append(final_coast)
+    
+    # Analyze
     full_log = []
     for log in transfer.logs:
         full_log.extend(log)
         
-    last_state = full_log[-1]
-    p_cal_arr, _ = engine.get_body_state('callisto', last_state['time'])
-    err = np.linalg.norm(np.array(last_state['position']) - np.array(p_cal_arr))
-    print(f"[Result] Final Error: {err:.1f} km")
+    min_dist = float('inf')
+    v_rel_at_min = None
+    best_time = None
     
-    center_body_pos, _ = engine.get_body_state('ganymede', mission_start_iso) # Just for ref
-    p_gan = center_body_pos
+    for state in full_log:
+        t_iso = state['time']
+        p_cal, v_cal = engine.get_body_state('callisto', t_iso)
+        r_vec = np.array(state['position']) - np.array(p_cal)
+        dist = np.linalg.norm(r_vec)
+        
+        if dist < min_dist:
+            min_dist = dist
+            v_rel_at_min = np.array(state['velocity']) - np.array(v_cal)
+            best_time = t_iso
+            
+    # Metrics
+    print(f"\n=== Flyby / Grazing Analysis ===")
+    R_cal = 2410.3
+    alt_p = min_dist - R_cal
+    print(f"Periapsis Altitude: {alt_p:.1f} km (at {best_time})")
+    
+    mu_cal = engine.GM['callisto']
+    v_flyby = np.linalg.norm(v_rel_at_min)
+    v_circ = np.sqrt(mu_cal / min_dist)
+    dv_capture = abs(v_flyby - v_circ)
+    
+    print(f"V_flyby: {v_flyby*1000:.1f} m/s")
+    print(f"V_circ:  {v_circ*1000:.1f} m/s")
+    print(f"Est. Capture DV: {dv_capture*1000:.1f} m/s")
+    print(f"Departure DV: {dv_mag*1000:.1f} m/s")
+    print(f"Total DV (Dep+Cap): {(dv_mag + dv_capture)*1000:.1f} m/s")
+
+    # Final Error (for reference)
+    err = min_dist - R_cal - 500.0
+    print(f"[Result] Deviation from 500km: {err:.1f} km")
+    
+    # For plotting reference
+    p_cal_arr, _ = engine.get_body_state('callisto', best_time)
+    p_gan = engine.get_body_state('ganymede', mission_start_iso)[0]
     p_cal = p_cal_arr
     
     # Plotting
