@@ -176,14 +176,35 @@ class JAXPlanner:
         full_params_out = jnp.concatenate([scaled_ab, jnp.array([flow_rate, thrust])])
         
         # One last propagation for Exact State
-        sol = self.jax_engine.propagate(y0, (0.0, dt_seconds), full_params_out, moon_interp, steering_mode='linear_tangent')
-        final_y = sol.ys[-1]
+    def solve_capture_burn_impulsive(self, 
+                                   r_ship: np.ndarray, 
+                                   v_ship: np.ndarray, 
+                                   r_moon: np.ndarray, 
+                                   v_moon: np.ndarray,
+                                   moon_gm: float,
+                                   target_ecc: float = 0.0):
+        """
+        Calculates retrograde burn to capture around moon.
+        """
+        r_rel = r_ship - r_moon
+        v_rel = v_ship - v_moon
         
-        final_pos = np.array(final_y[0:3])
-        final_mass = float(final_y[6])
+        dist = np.linalg.norm(r_rel)
+        speed = np.linalg.norm(v_rel)
         
-        print(f"  Final LTS Error: {final_err:.1f} km")
-        return np.array(params), final_pos, final_mass
+        # Target Velocity for desired eccentricity at this radius (assuming periapsis)
+        # v_p = sqrt(mu/r * (1+e))
+        v_target = np.sqrt(moon_gm / dist * (1 + target_ecc))
+        
+        # Delta V magnitude
+        # We want to reduce speed to v_target
+        dv_mag = v_target - speed # This will be negative
+        
+        # Direction: Anti-velocity
+        v_dir = v_rel / speed
+        dv_vec = v_dir * dv_mag
+        
+        return dv_vec, dv_mag
 
     def solve_impulsive_shooting(self, 
                                r_start: list, 
@@ -462,7 +483,7 @@ class JAXPlanner:
                     thrust: float,
                     isp: float,
                     mass_init: float = 1000.0,
-                    n_steps: int = 50):
+                    steering_mode: str = 'linear_tangent'):
         """
         Propagates a finite burn trajectory using JAX Engine.
         """
@@ -474,20 +495,24 @@ class JAXPlanner:
         g0 = 9.80665
         flow_rate = thrust / (isp * g0)
         
-        # Parameters for Engine: params are [a, b_norm] from optimizer
-        p = jnp.array(lts_params)
-        a = p[0:3]
-        b_norm = p[3:6]
-        b = b_norm / dt_seconds
-        scaled_ab = jnp.concatenate([a, b])
-        
-        full_params = jnp.concatenate([scaled_ab, jnp.array([flow_rate, thrust])])
+        # Pack params based on mode
+        if steering_mode == 'linear_tangent' and len(lts_params) == 6:
+            p = jnp.array(lts_params)
+            a = p[0:3]
+            b_norm = p[3:6]
+            b = b_norm / dt_seconds
+            scaled_ab = jnp.concatenate([a, b])
+            full_params = jnp.concatenate([scaled_ab, jnp.array([flow_rate, thrust])])
+        else:
+            # Constant or raw
+            full_params = jnp.concatenate([jnp.array(lts_params), jnp.array([flow_rate, thrust])])
         
         from diffrax import SaveAt, ODETerm, Dopri5, PIDController, diffeqsolve
         
-        t_eval = jnp.linspace(0, dt_seconds, n_steps)
+        # Output Grid
+        t_eval = jnp.linspace(0, dt_seconds, 100)
         
-        term = ODETerm(self.jax_engine.get_vector_field(moon_interp, 'linear_tangent'))
+        term = ODETerm(self.jax_engine.get_vector_field(moon_interp, steering_mode))
         solver = Dopri5()
         stepsize_controller = PIDController(rtol=1e-9, atol=1e-9)
         
@@ -528,15 +553,17 @@ class JAXPlanner:
                                  t_window_start_iso: str, 
                                  window_duration_days: float, 
                                  flight_time_days: float,
-                                 dt_step_hours: float = 4.0):
+                                 dt_step_hours: float = 4.0,
+                                 origin: str = 'ganymede',
+                                 target: str = 'callisto'):
         """
-        Scans for the optimal launch window using Fast Lambert Solver (CPU/Keplerian).
-        This acts as a geometric filter to find the best phase angle.
+        Scans for the optimal launch window using Fast Lambert Solver (2D Scan: Date x FlightTime).
+        Returns: (best_launch_dt, best_flight_time_sec, best_v_impulse)
         """
         from datetime import datetime, timedelta
         from universe.planning import solve_lambert
         
-        print(f"Scanning Launch Windows (Lambert Filter, step {dt_step_hours}h)...")
+        print(f"Scanning Launch Windows (Lambert 2D, step {dt_step_hours}h)...")
         
         if t_window_start_iso.endswith('Z'):
              iso_clean = t_window_start_iso[:-1] + '+00:00'
@@ -545,59 +572,69 @@ class JAXPlanner:
         base_dt = datetime.fromisoformat(iso_clean)
         
         n_steps = int(window_duration_days * 24.0 / dt_step_hours)
-        dt_flight_sec = flight_time_days * 86400.0
+        
+        # Flight Time Scan: 30% to 100% of the upper bound
+        dt_max = flight_time_days * 86400.0
+        dt_min = dt_max * 0.3
+        dt_vals = np.linspace(dt_min, dt_max, 8) # 8 variants of time-of-flight
         
         best_dv = float('inf')
-        best_dt = None
+        best_launch_time = None
+        best_flight_time = None
         best_v_impulse = None
         
         mu_jup = self.engine.GM['jupiter']
         
-        results = []
-        
         for i in range(n_steps):
             t_curr = base_dt + timedelta(hours=i*dt_step_hours)
             t_launch_iso = t_curr.isoformat().replace('+00:00', 'Z')
-            t_arrive_iso = (t_curr + timedelta(days=flight_time_days)).isoformat().replace('+00:00', 'Z')
             
-            # 1. Get Geometry
-            p_gan, v_gan = self.engine.get_body_state('ganymede', t_launch_iso)
-            p_cal, v_cal = self.engine.get_body_state('callisto', t_arrive_iso)
+            # Origin State
+            p_org, v_org = self.engine.get_body_state(origin, t_launch_iso)
             
-            # Launch from 5000km offset (simplified)
-            r_start = np.array(p_gan) + np.array([5000.0, 0.0, 0.0])
-            r_target = np.array(p_cal)
-            
-            # 2. Lambert Solve (Keplerian approximation)
-            try:
-                v_dep, v_arr = solve_lambert(r_start, r_target, dt_flight_sec, mu_jup)
+            # Inner Loop: Flight Time
+            for dt_flight in dt_vals:
+                t_arr_dt = t_curr + timedelta(seconds=dt_flight)
+                t_arrive_iso = t_arr_dt.isoformat().replace('+00:00', 'Z')
                 
-                # 3. Calculate DV (Departure Delta V from Ganymede velocity)
-                dv = np.linalg.norm(v_dep - np.array(v_gan))
+                # Target State
+                p_tgt, v_tgt = self.engine.get_body_state(target, t_arrive_iso)
                 
-                results.append((t_curr, dv, v_dep))
-                
-                if dv < best_dv:
-                    best_dv = dv
-                    best_dt = t_curr
-                    best_v_impulse = v_dep
+                # Lambert
+                try:
+                    v_dep, v_arr = solve_lambert(p_org, p_tgt, dt_flight, mu_jup)
                     
-            except Exception:
-                pass
-                
-        # Optional: Print top 3
-        results.sort(key=lambda x: x[1])
-        print("Top 3 Windows (Lambert Estimate):")
-        for k in range(min(3, len(results))):
-            t, dv, _ = results[k]
-            print(f"  {t.isoformat()}: ~{dv*1000:.1f} m/s")
+                    # DV1: Departure
+                    v_inf_dep_vec = v_dep - np.array(v_org)
+                    dv1 = np.linalg.norm(v_inf_dep_vec)
+                    
+                    # DV2: Arrival (Capture)
+                    v_inf_arr_vec = v_arr - np.array(v_tgt)
+                    dv2 = np.linalg.norm(v_inf_arr_vec)
+                    
+                    total_dv = dv1 + dv2
+                    
+                    if total_dv < best_dv:
+                        best_dv = total_dv
+                        best_launch_time = t_curr
+                        best_flight_time = dt_flight
+                        best_v_impulse = v_dep
+                        
+                except Exception as e:
+                    if i % 10 == 0: print(f"Lambert scan error: {e}")
+                    continue
             
-        if best_dt is None:
-             raise ValueError("No valid window found.")
+            # Log periodic best
+            if i % 20 == 0 and best_dv != float('inf'):
+                 pass # print(f"  scan {i}/{n_steps}: best dv {best_dv:.1f}")
 
-        print(f"Optimal Window Selected: {best_dt.isoformat()} (Lambert DV: {best_dv*1000:.1f} m/s)")
-        
-        return best_dt, jnp.array(best_v_impulse)
+        if best_launch_time:
+            print(f"Optimal Window Selected: {best_launch_time.isoformat()} (Lambert DV: {best_dv:.1f} m/s, TOF: {best_flight_time/86400:.2f}d)")
+            return best_launch_time, best_flight_time, jnp.array(best_v_impulse)
+        else:
+            print("Warning: No valid window found.")
+            # Return defaults if no valid window is found
+            return base_dt, dt_max, jnp.zeros(3)
 
     def find_optimal_parking_phase(self, 
                                  r_parking: list, 

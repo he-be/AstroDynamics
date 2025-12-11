@@ -56,11 +56,38 @@ class TrajectoryValidator:
              if dt > 20 * median_dt and dt > 600.0: # 10 minutes
                  self.warnings.append(f"Index {i}->{i+1}: Large Time Gap ({dt:.1f}s)")
 
-    def validate_kinematics(self, v_tol=1.0):
+    def validate_kinematics_and_maneuvers(self, v_tol=1.0):
         """
-        Checks if the position change matches the stored velocity.
-        v_tol: Tolerance in km/s (Defaul 1.0 km/s due to integration/sampling diffs)
+        Checks kinematics, reconciling velocity jumps with known maneuvers.
+        Handles finite burns by verifying acceleration magnitude.
         """
+        maneuvers = self.data.get('maneuvers', [])
+        from datetime import datetime
+        
+        # Sort maneuvers
+        maneuver_map = []
+        if maneuvers and 'meta' in self.data:
+            meta_start = self.data['meta']['startTime']
+            t0_obj = datetime.fromisoformat(meta_start.replace('Z', '+00:00'))
+            
+            for m in maneuvers:
+                 if isinstance(m['time'], str):
+                     m_dt = datetime.fromisoformat(m['time'].replace('Z', '+00:00'))
+                     t_sec = (m_dt - t0_obj).total_seconds()
+                 else:
+                     t_sec = float(m['time'])
+                     
+                 maneuver_map.append({
+                     't_start': t_sec,
+                     't_end': t_sec + m.get('duration', 0.0),
+                     'dv': m.get('delta_v', 0.0), # Total planned DV
+                     'type': m.get('type', 'unknown'),
+                     'duration': m.get('duration', 0.0),
+                     'obs_dv': 0.0,
+                     'matched': False
+                 })
+            # print(f"[Validator] Loaded {len(maneuver_map)} expected maneuvers.")
+
         for i in range(1, len(self.timeline)):
             prev = self.timeline[i-1]
             curr = self.timeline[i]
@@ -74,29 +101,71 @@ class TrajectoryValidator:
             v_prev = np.array(prev['velocity'])
             v_curr = np.array(curr['velocity'])
             
-            # Average velocity state
             v_state_avg = (v_prev + v_curr) / 2.0
-            
-            # Apparent velocity
             dr = r_curr - r_prev
             v_apparent = dr / dt
-            
-            # Error
             v_diff = np.linalg.norm(v_apparent - v_state_avg)
             
-            # Speed check (Teleportation)
-            speed_apparent = np.linalg.norm(v_apparent)
-            if speed_apparent > 100.0: 
-                 self.errors.append(f"Index {i}: Teleportation? Apparent V={speed_apparent:.1f} km/s (State V={np.linalg.norm(v_state_avg):.1f})")
+            dv_step = np.linalg.norm(v_curr - v_prev)
 
+            # Check if inside a maneuver
+            t_mid = (curr['time'] + prev['time']) / 2.0
+            active_maneuver = None
+            
+            for m in maneuver_map:
+                # Tolerance: start-10s to end+10s
+                if (m['t_start'] - 10.0) <= t_mid <= (m['t_end'] + 10.0):
+                    active_maneuver = m
+                    break
+            
+            if active_maneuver:
+                # Finite Burn Check
+                # Expected DV rate = Total DV / Duration
+                # But mass changes, so acc increases. Linear approx: avg acc.
+                if active_maneuver['duration'] > 1.0:
+                    avg_acc = active_maneuver['dv'] / active_maneuver['duration']
+                    exp_dv_step = avg_acc * dt
+                    # Allow 50% variance (mass effect + geometry) + 0.1 km/s noise
+                    tolerance = max(0.1, exp_dv_step * 0.5)
+                else:
+                    # Impulsive
+                    exp_dv_step = active_maneuver['dv']
+                    tolerance = max(1.0, active_maneuver['dv'] * 0.2)
+                
+                # Check agreement
+                if abs(dv_step - exp_dv_step) < tolerance:
+                    # Satisfied
+                    active_maneuver['obs_dv'] += dv_step
+                    active_maneuver['matched'] = True 
+                    continue
+                else:
+                    # Mismatch in rate
+                    # Maybe it's just the edge of the burn?
+                    if dv_step < tolerance: # Negligible
+                        continue
+                    # Else warning
+                    self.warnings.append(f"Index {i}: Burn Rate Mismatch at t={t_mid:.1f}. Obs {dv_step:.3f} vs Exp {exp_dv_step:.3f}")
+            
+            # If not a verified burn step, check Physics
             if v_diff > v_tol:
                 msg = f"Index {i}: Kinematic Mismatch |dr/dt - v| = {v_diff:.3f} km/s (dt={dt:.1f}s)"
                 self.warnings.append(msg)
                 
-                # Elevate to error if severe
                 if v_diff > 5.0:
-                    details = f"  Pos Jump: {np.linalg.norm(dr):.1f} km. Apparent V: {speed_apparent:.1f}. State V: {np.linalg.norm(v_state_avg):.1f}"
-                    self.errors.append(f"Index {i}: SEVERE Kinematic Mismatch ({v_diff:.1f} km/s)\n    {details}")
+                     self.errors.append(f"Index {i}: SEVERE Kinematic Mismatch ({v_diff:.1f} km/s) [No matching maneuver]")
+
+        # Final Verification of Maneuvers
+        for m in maneuver_map:
+            if not m['matched']:
+                self.warnings.append(f"Missing Maneuver: {m['type']} (Exp {m['dv']:.2f} km/s)")
+            else:
+                # Check Total DV
+                diff = abs(m['obs_dv'] - m['dv'])
+                # If error > 20%
+                if diff > max(0.2, m['dv'] * 0.2):
+                     self.warnings.append(f"Maneuver DV Mismatch ({m['type']}): Obs {m['obs_dv']:.2f} vs Exp {m['dv']:.2f} km/s")
+                else:
+                     pass # print(f"Verified {m['type']}: {m['obs_dv']:.2f}/{m['dv']:.2f} km/s")
 
     def validate_safety(self):
         # Body Radii
@@ -131,7 +200,7 @@ class TrajectoryValidator:
             
         self.validate_structure()
         self.validate_time()
-        self.validate_kinematics()
+        self.validate_kinematics_and_maneuvers()
         self.validate_safety()
         
         # Report

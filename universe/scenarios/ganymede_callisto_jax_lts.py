@@ -26,9 +26,9 @@ def run_jax_lts_scenario():
     # 2. Mission Context
     # Optimal Window Found by optimization_scan.py
     # Dep: 2025-08-18, TOF: 5.52d -> Total DV ~2.4 km/s
-    mission_start_iso = "2025-08-18T00:00:00Z"
-    flight_time_days = 5.52
-    scan_window_days = 2.0 # Narrow scan around optimal
+    mission_start_iso = "2025-09-18T00:00:00Z"
+    flight_time_days = 10.0
+    scan_window_days = 20.0 # Narrow scan around optimal
     
     # 3. Find Window
     t_launch_iso = transfer.find_window(
@@ -77,29 +77,43 @@ def run_jax_lts_scenario():
     t_arrival_nom = t_launch_ref + timedelta(days=transfer.flight_time_days)
     
     dt_to_arr = (t_arrival_nom - last_t_obj).total_seconds()
-    print(f"  Time to Nominal Arrival: {dt_to_arr/3600:.1f} h")
+    # 8. Capture Burn
+    transfer.execute_arrival()
     
-    # Propagate: From [Last State] to [Arrival + 6 hours]
-    # We want high resolution for the flyby (30s steps)
-    dt_coast_total = dt_to_arr + 6 * 3600.0 # +6 hours past arrival
-    n_steps_enc = int(dt_coast_total / 30.0) # 30s resolution
-    if n_steps_enc < 200: n_steps_enc = 200
-    if n_steps_enc > 3000: n_steps_enc = 3000 # Cap for JSON size
+    # 9. Automated Validation
     
-    print(f"  Propagating {dt_coast_total/3600:.1f} h with {n_steps_enc} steps...")
-    
-    final_coast = jax_planner.evaluate_trajectory(
-        r_start=last_log['position'], v_start=last_log['velocity'],
-        t_start_iso=last_log['time'], dt_seconds=dt_coast_total,
-        mass=last_log['mass'], n_steps=n_steps_enc
-    )
-    transfer.add_log(final_coast)
-    
-    # Analyze
+    # For plotting reference
+    # The execute_arrival method now handles the full log and analysis,
+    # so we can retrieve the relevant info from the transfer object.
     full_log = []
     for log in transfer.logs:
         full_log.extend(log)
         
+    # Get the final state and arrival details from the transfer object
+    # Assuming execute_arrival updates these or they can be derived from full_log
+    # For plotting, we need the state at arrival and the target body's position
+    
+    # Find the state closest to the nominal arrival time or the actual capture point
+    # For simplicity, let's use the last state in the log for the target body position
+    # and the first state for the origin body position.
+    
+    # Re-calculate min_dist and related metrics for plotting if needed,
+    # or use values stored by execute_arrival if it makes them accessible.
+    # For now, let's assume we can get the final periapsis altitude and DV from the transfer object.
+    
+    # Placeholder for metrics that would come from execute_arrival
+    # You would typically get these from the return value of execute_arrival or attributes of transfer
+    # For example:
+    # arrival_result = transfer.execute_arrival(...)
+    # alt_p = arrival_result['periapsis_altitude']
+    # dv_capture = arrival_result['capture_dv']
+    # best_time = arrival_result['periapsis_time']
+    
+    # Since execute_arrival is expected to handle the analysis,
+    # we'll use placeholder values or derive from the full_log for plotting purposes.
+    # This part needs to be aligned with the actual output/state of `transfer.execute_arrival()`
+    
+    # For now, let's re-derive min_dist and related for plotting consistency
     min_dist = float('inf')
     v_rel_at_min = None
     best_time = None
@@ -115,28 +129,25 @@ def run_jax_lts_scenario():
             v_rel_at_min = np.array(state['velocity']) - np.array(v_cal)
             best_time = t_iso
             
-    # Metrics
-    print(f"\n=== Flyby / Grazing Analysis ===")
     R_cal = 2410.3
     alt_p = min_dist - R_cal
-    print(f"Periapsis Altitude: {alt_p:.1f} km (at {best_time})")
     
     mu_cal = engine.GM['callisto']
-    v_flyby = np.linalg.norm(v_rel_at_min)
-    v_circ = np.sqrt(mu_cal / min_dist)
+    v_flyby = np.linalg.norm(v_rel_at_min) if v_rel_at_min is not None else 0.0
+    v_circ = np.sqrt(mu_cal / min_dist) if min_dist > 0 else 0.0
     dv_capture = abs(v_flyby - v_circ)
     
+    err = alt_p - 500.0 # Deviation from target 500km altitude
+    
+    print(f"\n=== Flyby / Grazing Analysis (from full_log after arrival) ===")
+    print(f"Periapsis Altitude: {alt_p:.1f} km (at {best_time})")
     print(f"V_flyby: {v_flyby*1000:.1f} m/s")
     print(f"V_circ:  {v_circ*1000:.1f} m/s")
     print(f"Est. Capture DV: {dv_capture*1000:.1f} m/s")
     print(f"Departure DV: {dv_mag*1000:.1f} m/s")
     print(f"Total DV (Dep+Cap): {(dv_mag + dv_capture)*1000:.1f} m/s")
-
-    # Final Error (for reference)
-    err = min_dist - R_cal - 500.0
     print(f"[Result] Deviation from 500km: {err:.1f} km")
     
-    # For plotting reference
     p_cal_arr, _ = engine.get_body_state('callisto', best_time)
     p_gan = engine.get_body_state('ganymede', mission_start_iso)[0]
     p_cal = p_cal_arr
@@ -194,19 +205,8 @@ def run_jax_lts_scenario():
             "bodies": ["ganymede", "callisto", "jupiter"]
         },
         "timeline": formatted_timeline,
-        "maneuvers": [] 
+        "maneuvers": transfer.events
     }
-    
-    # Add Maneuver Info (Burn)
-    # Burn starts at t_launch.
-    burn_start_sec = (launch_dt - start_dt).total_seconds()
-    
-    manifest["maneuvers"].append({
-        "startTime": burn_start_sec,
-        "duration": t_burn,
-        "deltaV": [0.0, 0.0, 0.0], 
-        "type": "finite"
-    })
 
     with open(json_path, 'w') as f:
         json.dump(manifest, f, indent=2)

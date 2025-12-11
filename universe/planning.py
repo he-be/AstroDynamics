@@ -98,6 +98,9 @@ def solve_lambert(r1, r2, dt, mu, cw=False, max_revs=0):
     # Check for 180 degree transfer
     cross_r1_r2 = np.cross(r1_vec, r2_vec)
     cross_mag = np.linalg.norm(cross_r1_r2)
+    
+    # ... existing code ...
+
     dot_prod = np.dot(r1_vec, r2_vec)
     
     if cross_mag < 1e-6 and dot_prod < 0:
@@ -528,3 +531,80 @@ def refine_lts_transfer(engine, r_start, v_start, t_start, t_end, target_pos_at_
             break
             
     return control_params
+
+def predict_hohmann_window_circular(r1, r2, current_phase_rad, mu):
+    """
+    Calculates time to next Hohmann opportunity for circular coplanar orbits.
+    
+    Args:
+        r1: Origin orbital radius (km)
+        r2: Target orbital radius (km)
+        current_phase_rad: theta_2 - theta_1 (radians, range -pi to pi)
+                           Angle of Target relative to Origin.
+        mu: Gravitational parameter of central body
+        
+    Returns:
+        dt_wait: Seconds to wait for launch
+        dt_flight: Seconds of flight time
+        phi_req: Required phase angle (Target - Origin) at launch (rad)
+    """
+    import math
+    
+    # Mean Motions (rad/s)
+    n1 = math.sqrt(mu / r1**3)
+    n2 = math.sqrt(mu / r2**3)
+    
+    # Relative Rate (Target relative to Origin)
+    n_rel = n2 - n1 
+    
+    # Hohmann Transfer Time (Semi-ellipse)
+    a_trans = (r1 + r2) / 2.0
+    t_flight = math.pi * math.sqrt(a_trans**3 / mu)
+    
+    # Required Phase Alignment at Launch
+    # We want to arrive when Target is at Apoapsis/Periapsis (180 deg from Launch).
+    # Spacecraft travels 180 deg (pi).
+    # Target travels n2 * t_flight.
+    # At arrival: theta_2 = theta_1 (mod 2pi) ? No, they meet.
+    # theta_SC_final = theta_1_initial + pi
+    # theta_2_final = theta_2_initial + n2 * t_flight
+    # We want theta_SC_final == theta_2_final
+    # theta_1_initial + pi = theta_2_initial + n2 * t_flight
+    # theta_2_initial - theta_1_initial = pi - n2 * t_flight
+    
+    phi_req = math.pi - n2 * t_flight
+    
+    # Normalize phases to (-pi, pi)
+    def normalize(angle):
+        while angle > math.pi: angle -= 2*math.pi
+        while angle <= -math.pi: angle += 2*math.pi
+        return angle
+        
+    phi_req = normalize(phi_req)
+    phi_curr = normalize(current_phase_rad)
+    
+    # We need to span the difference d_phi at rate n_rel.
+    # phi_final = phi_start + rate * t
+    # phi_req = phi_curr + n_rel * t + 2pi*k
+    # n_rel * t = phi_req - phi_curr + 2pi*k
+    # t = (phi_req - phi_curr + 2pi*k) / n_rel
+    
+    d_phi = phi_req - phi_curr
+    
+    # Find smallest positive t
+    # Since n_rel is negative (inner->outer), dividing by negative flips inequality
+    
+    candidates = []
+    # Test k range [-3 to 3]
+    for k in range(-5, 6):
+        numerator = d_phi + 2*math.pi*k
+        t = numerator / n_rel
+        if t >= 0:
+            candidates.append(t)
+            
+    if not candidates:
+        dt_wait = 0.0
+    else:
+        dt_wait = min(candidates)
+        
+    return dt_wait, t_flight, phi_req

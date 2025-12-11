@@ -43,23 +43,76 @@ class Transfer:
     def find_window(self, start_time_iso: str, window_days: float, flight_time_days: float, dt_step_hours: float = 6.0):
         """
         Finds optimal launch window.
+        Uses analytic Hohmann prediction to center the search.
         """
-        print(f"Scanning {window_days} days for optimal window ({self.origin} -> {self.target})...")
-        opt_launch_dt, opt_v_dep = self.planner.find_optimal_launch_window(
-            t_window_start_iso=start_time_iso,
-            window_duration_days=window_days,
-            flight_time_days=flight_time_days,
-            dt_step_hours=dt_step_hours
+        from universe.planning import predict_hohmann_window_circular
+        
+        # 1. Analytic Prediction (Hohmann Seeding)
+        print(f"Predicting Hohmann Window for {self.origin} -> {self.target}...")
+        
+        t_start_obj = datetime.fromisoformat(start_time_iso.replace('Z', '+00:00'))
+        
+        # Get States for phase calculation
+        p_org, _ = self.engine.get_body_state(self.origin, start_time_iso)
+        p_tgt, _ = self.engine.get_body_state(self.target, start_time_iso)
+        
+        r1 = np.linalg.norm(p_org)
+        r2 = np.linalg.norm(p_tgt)
+        mu = self.engine.GM['jupiter']
+        
+        # Phase (Angle of Target relative to Origin)
+        # Assuming Z-axis is normal (planar approx)
+        theta1 = np.arctan2(p_org[1], p_org[0])
+        theta2 = np.arctan2(p_tgt[1], p_tgt[0])
+        phase_curr = theta2 - theta1
+        
+        dt_wait, dt_flight_hohmann, phi_req = predict_hohmann_window_circular(
+            r1, r2, phase_curr, mu
         )
+        
+        print(f"  Analytic Prediction: Wait {dt_wait/86400:.2f}d, Flight {dt_flight_hohmann/86400:.2f}d")
+        
+        # Center the scan window around predicted date
+        predicted_launch = t_start_obj + timedelta(seconds=dt_wait)
+        
+        # We start scan slightly before prediction to catch local optimum
+        scan_start = predicted_launch - timedelta(days=2.0) 
+        scan_duration = 5.0 # Narrow scan +/- 2.5 days is sufficient if prediction is good
+        
+        print(f"  Refining Search Window: {scan_start.isoformat()} (+{scan_duration}d scan)")
+        
+        # Use Hohmann Flight Time as the guide
+        # User input 'flight_time_days' is an upper bound constraint.
+        if dt_flight_hohmann > flight_time_days * 86400.0:
+             print(f"  [Warning] Hohmann Time ({dt_flight_hohmann/86400:.1f}d) > Constraint ({flight_time_days}d). Efficiency loss expected.")
+             scan_flight_time_bound = flight_time_days
+        else:
+             # If constraint allows, scan around Hohmann time (up to 1.2x just to be safe)
+             scan_flight_time_bound = dt_flight_hohmann / 86400.0 * 1.2
+             if scan_flight_time_bound > flight_time_days:
+                 scan_flight_time_bound = flight_time_days
+            
+        scan_start_iso = scan_start.isoformat().replace('+00:00', 'Z')
+        
+        # 2. Detailed Scan
+        opt_launch_dt, opt_flight_sec, opt_v_dep = self.planner.find_optimal_launch_window(
+            t_window_start_iso=scan_start_iso,
+            window_duration_days=scan_duration,
+            flight_time_days=scan_flight_time_bound, 
+            dt_step_hours=dt_step_hours,
+            origin=self.origin,
+            target=self.target
+        )
+        
         # Store result
         t_iso = opt_launch_dt.isoformat().replace('+00:00', 'Z')
         if not t_iso.endswith('Z'): t_iso += 'Z'
         
         self.t_launch_iso = t_iso
-        self.flight_time_days = flight_time_days
-        self.opt_v_dep = opt_v_dep # Lambert Velocity Vector
+        self.flight_time_days = opt_flight_sec / 86400.0 # Update to optimized time
+        self.opt_v_dep = opt_v_dep 
         
-        print(f"--> Selected Launch: {self.t_launch_iso}")
+        print(f"--> Selected Launch: {self.t_launch_iso} (TOF: {self.flight_time_days:.2f}d)")
         return t_iso
         
     def setup_departure(self, parking_orbit: dict = None, wait: bool = True):
@@ -164,6 +217,8 @@ class Transfer:
         dt_sec = self.flight_time_days * 86400.0
         
         # 2. Oberth / Lambert Guess
+        final_target_pos = np.array(p_target) # Initialize safe default
+        
         # Calculate Lambert Arc (Interplanetary/Jovicentric)
         try:
              v_lamb, v_arr_lamb = solve_lambert(r_launch, np.array(p_target), dt_sec, MU_JUP)
@@ -319,6 +374,15 @@ class Transfer:
         self.add_log(burn_log)
         self.burn_end_state = burn_log[-1]
         
+        # Log Event
+        self.events.append({
+            "type": "departure",
+            "time": t_start_burn_iso,
+            "duration": t_burn,
+            "delta_v": dv_mag,
+            "delta_v_vec": dv_impulse.tolist()
+        })
+        
         return burn_log, t_burn, dv_mag
         
     def perform_mcc(self, thrust: float, isp: float, fraction: float = 0.5):
@@ -366,5 +430,120 @@ class Transfer:
         self.add_log(result['maneuver_log'])
         self.last_result = result
         
+        # Log Event
+        # MCC result usually has dv vector
+        dv_vec = result.get('dv_vec', [0,0,0])
+        dv_mag = np.linalg.norm(dv_vec)
+        
+        self.events.append({
+            "type": "mcc",
+            "time": t_mcc_iso, # Or start of burn?
+            "duration": result.get('duration', 0.0), # Assuming planner returns this
+            "delta_v": dv_mag,
+            "delta_v_vec": list(dv_vec)
+        })
+        
         return result
+        
+    def execute_arrival(self, target_ecc: float = 0.0, periapsis_alt_km: float = 500.0):
+        """
+        Executes capture burn at periapsis.
+        """
+        print(f"\n[Transfer] executing Arrival/Capture (e={target_ecc}, alt={periapsis_alt_km} km)...")
+        
+        # 1. Find Periapsis State from last log
+        last_log = self.logs[-1]
+        
+        # Search for min distance
+        best_idx = -1
+        min_dist = float('inf')
+        
+        target_key = self.target
+        mu_target = self.engine.GM[target_key]
+        
+        for i, p in enumerate(last_log):
+            t_iso = p['time']
+            # JAX logs might not have bodies, use engine
+            p_body, _ = self.engine.get_body_state(target_key, t_iso)
+            
+            r_ship = np.array(p['position'])
+            r_body = np.array(p_body)
+            
+            dist = np.linalg.norm(r_ship - r_body)
+            if dist < min_dist:
+                min_dist = dist
+                best_idx = i
+                    
+        if best_idx == -1:
+            print("  ERROR: No approach found in last log.")
+            return None
+            
+        periapsis_state = last_log[best_idx]
+        print(f"  Periapsis found at t={periapsis_state['time']}, r={min_dist:.1f} km")
+        
+        # 2. Calculate Impulsive Burn
+        r_ship = np.array(periapsis_state['position'])
+        v_ship = np.array(periapsis_state['velocity'])
+        
+        r_body, v_body = self.engine.get_body_state(target_key, periapsis_state['time'])
+        
+        dv_vec, dv_mag = self.planner.solve_capture_burn_impulsive(
+            r_ship, v_ship, np.array(r_body), np.array(v_body),
+            moon_gm=mu_target, target_ecc=target_ecc
+        )
+        
+        print(f"  Required Impulsive DV: {dv_mag*1000:.1f} m/s")
+        
+        # 3. Finite Burn Parameters
+        mass_pre = periapsis_state['mass']
+        thrust = 50000.0 # N (High Thrust for instant capture)
+        isp = 320.0  # s
+        g0 = 9.80665
+        ve = isp * g0 / 1000.0 # km/s
+        mf = mass_pre / np.exp(abs(dv_mag)/ve)
+        m_prop = mass_pre - mf
+        t_burn = (m_prop * ve * 1000.0) / thrust 
+        
+        print(f"  Estimated Burn Duration: {t_burn:.1f} s")
+        
+        # Use Constant Steering aligned with DV Vector
+        u_dir = dv_vec / np.linalg.norm(dv_vec)
+        params = list(u_dir)
+        
+        # 4. Execute Burn (Constant Steering)
+        capture_log = self.planner.evaluate_burn(
+             r_start=periapsis_state['position'],
+             v_start=periapsis_state['velocity'],
+             t_start_iso=periapsis_state['time'],
+             dt_seconds=t_burn,
+             lts_params=np.array(params), # Constant vector
+             thrust=thrust, isp=isp, mass_init=mass_pre,
+             steering_mode='constant'
+        )
+        print(f"  Capture Log: {len(capture_log)} points")
+        self.add_log(capture_log)
+        
+        # Log Event
+        self.events.append({
+            "type": "capture",
+            "time": periapsis_state['time'], # Changed from start_state to periapsis_state
+            "duration": t_burn,
+            "delta_v": dv_mag,
+            "delta_v_vec": dv_vec.tolist(), # Changed from dv_impulse to dv_vec
+            "target_ecc": target_ecc
+        })
+        
+        # 6. Parking Orbit
+        parking_log = self.planner.evaluate_trajectory(
+             r_start=capture_log[-1]['position'],
+             v_start=capture_log[-1]['velocity'],
+             t_start_iso=capture_log[-1]['time'],
+             dt_seconds=86400.0 * 2, # 2 days
+             mass=capture_log[-1]['mass'],
+             n_steps=500
+        )
+        print(f"  Parking Log: {len(parking_log)} points. End Time: {parking_log[-1]['time']}")
+        self.add_log(parking_log)
+        
+        return capture_log, parking_log
         
