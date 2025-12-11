@@ -1,0 +1,12 @@
+Refined Impulse DV: 1592.4 m/s
+Mass: 1000.0 kg
+Thrust: 2000.0 N, Isp: 3000.0 s
+Ve: 29.42 km/s, Flow Rate: 0.0680 kg/s
+Burn Time: 782.80 s
+Half-Burn Offset Applied.
+Launch Time (Impulse): 2025-08-18T08:44:32.854282Z
+Burn Start Time: 2025-08-18T08:38:01.453771Z
+Launch Pos: [1069431.27663525  -67479.46623074  -15180.34103628]
+Burn Start Pos: [1068852.1730932104, -71788.59739287797, -16997.351839699662]
+Target Pos: [-1216507.42095385  1314737.49741222   601437.0759728 ]
+Impulse Vector: [1.2265327  0.56733815 0.84236676]

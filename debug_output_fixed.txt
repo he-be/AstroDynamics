@@ -1,0 +1,21 @@
+=== Lambert Solver vs Reality Check ===
+Loading Ephemeris kernels... (this may take a while on first run)
+Transfer: 2025-08-31T16:00:00Z -> 2025-09-06T16:00:00Z (6.0 days)
+R1 (Ganymede): 1067875.6 km
+R2 (Callisto): 1882549.3 km
+Using Mu_Jupiter: 126686534.0
+
+[Test 1] Lambert vs Kepler Propagator (2-Body Checks)
+  Target  : [-335939.06631341 1677533.45663147  785505.08102138]
+  Actual  : [-335939.21846745 1677533.41206073  785505.05983065]
+  Error   : 0.2 km
+  -> PASS: Lambert solver is mathematically consistent.
+
+[Test 2] Lambert vs N-Body (JAX Engine)
+  Starting N-Body test 2.0 hours after departure (to avoid singularity).
+  Start R: 1083629.4 km
+  Initial Acceleration: 1.371e-04 km/s^2
+  Target  : [-335939.06631341 1677533.45663147  785505.08102138]
+  Actual  : [-527169.33591627 1495858.76546478  701818.19977741]
+  Error   : 276727.7 km
+  Perturbation (N-Body Effect): 276727.5 km

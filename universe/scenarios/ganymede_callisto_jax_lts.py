@@ -24,9 +24,11 @@ def run_jax_lts_scenario():
     transfer = Transfer(origin='ganymede', target='callisto', planner=jax_planner)
     
     # 2. Mission Context
-    mission_start_iso = "2025-07-29T12:00:00Z"
-    flight_time_days = 4.0
-    scan_window_days = 20.0
+    # Optimal Window Found by optimization_scan.py
+    # Dep: 2025-08-18, TOF: 5.52d -> Total DV ~2.4 km/s
+    mission_start_iso = "2025-08-18T00:00:00Z"
+    flight_time_days = 5.52
+    scan_window_days = 2.0 # Narrow scan around optimal
     
     # 3. Find Window
     t_launch_iso = transfer.find_window(
@@ -50,7 +52,8 @@ def run_jax_lts_scenario():
     _, t_burn, dv_mag = transfer.execute_departure(
         thrust=2000.0,
         isp=3000.0,
-        initial_mass=1000.0
+        initial_mass=1000.0,
+        arrival_periapsis_km=500.0 # Target 500km altitude, NOT impact
     )
     
     # 6. Corrections (TCM-1 & TCM-2)
@@ -63,19 +66,34 @@ def run_jax_lts_scenario():
         print("TCM-1 Sufficient. Skipping TCM-2.")
     
     # 7. Propagate Past Arrival (Grazing Analysis)
-    print("Propagating past arrival to find Periapsis...")
+    print("Propagating past arrival to find Periapsis (High Res)...")
     
     # Get last state
     last_log = transfer.logs[-1][-1]
+    last_t_obj = datetime.fromisoformat(last_log['time'].replace('Z', '+00:00'))
     
-    # Propagate for 1 more day
-    extra_coast_sec = 86400.0 
+    # Determine exact arrival time
+    t_launch_ref = datetime.fromisoformat(transfer.t_launch_iso.replace('Z', '+00:00'))
+    t_arrival_nom = t_launch_ref + timedelta(days=transfer.flight_time_days)
+    
+    dt_to_arr = (t_arrival_nom - last_t_obj).total_seconds()
+    print(f"  Time to Nominal Arrival: {dt_to_arr/3600:.1f} h")
+    
+    # Propagate: From [Last State] to [Arrival + 6 hours]
+    # We want high resolution for the flyby (30s steps)
+    dt_coast_total = dt_to_arr + 6 * 3600.0 # +6 hours past arrival
+    n_steps_enc = int(dt_coast_total / 30.0) # 30s resolution
+    if n_steps_enc < 200: n_steps_enc = 200
+    if n_steps_enc > 3000: n_steps_enc = 3000 # Cap for JSON size
+    
+    print(f"  Propagating {dt_coast_total/3600:.1f} h with {n_steps_enc} steps...")
+    
     final_coast = jax_planner.evaluate_trajectory(
         r_start=last_log['position'], v_start=last_log['velocity'],
-        t_start_iso=last_log['time'], dt_seconds=extra_coast_sec,
-        mass=last_log['mass'], n_steps=200
+        t_start_iso=last_log['time'], dt_seconds=dt_coast_total,
+        mass=last_log['mass'], n_steps=n_steps_enc
     )
-    transfer.logs.append(final_coast)
+    transfer.add_log(final_coast)
     
     # Analyze
     full_log = []
@@ -193,6 +211,19 @@ def run_jax_lts_scenario():
     with open(json_path, 'w') as f:
         json.dump(manifest, f, indent=2)
     print(f"Saved {json_path}")
+    
+    # 9. Automated Validation
+    print("\n=== Automated Validation ===")
+    # Ensure project root is in path if needed, though usually safe
+    from universe.tools.validator import TrajectoryValidator
+    
+    validator = TrajectoryValidator(json_path)
+    result = validator.run()
+    
+    if not result:
+        print("!!! VALIDATION FAILED - Check errors above !!!")
+    else:
+        print("Validation Passed. Trajectory is ready for viewing.")
 
 
 if __name__ == "__main__":

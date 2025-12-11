@@ -16,8 +16,30 @@ class Transfer:
         self.events = [] # List of event dicts
         self.t_launch_iso = None
         self.flight_time_days = None
+        self.flight_time_days = None
         self.launch_state = None # State at execution start
+        self.target_pos_vector = None # Targeted arrival position (B-Plane)
         
+    def add_log(self, new_log: list):
+        """Append a new log segment, handling overlaps."""
+        if not new_log: return
+        
+        if self.logs and self.logs[-1]:
+            last_entry = self.logs[-1][-1]
+            
+            # Robust comparison using datetime
+            t_last = datetime.fromisoformat(last_entry['time'].replace('Z', '+00:00'))
+            t_new = datetime.fromisoformat(new_log[0]['time'].replace('Z', '+00:00'))
+            
+            dt = abs((t_new - t_last).total_seconds())
+            
+            if dt < 0.1: # 100ms tolerance
+                # Skip duplicate start
+                new_log = new_log[1:]
+                
+        if new_log:
+            self.logs.append(new_log)
+
     def find_window(self, start_time_iso: str, window_days: float, flight_time_days: float, dt_step_hours: float = 6.0):
         """
         Finds optimal launch window.
@@ -93,7 +115,25 @@ class Transfer:
                 target_body=self.target
             )
             
-            self.logs.append(scan_log)
+            # Truncate log to stop BEFORE launch time
+            # Robust method: Convert to datetime and filter
+            truncated_log = []
+            
+            t_launch_dt = datetime.fromisoformat(best_step['time'].replace('Z', '+00:00'))
+            
+            for i, step in enumerate(scan_log):
+                t_step_dt = datetime.fromisoformat(step['time'].replace('Z', '+00:00'))
+                
+                # If step is at or after launch, stop (launch state will be start of burn)
+                if t_step_dt >= t_launch_dt:
+                    print(f"  [Transfer] Truncating Parking Log at index {i} (Time: {step['time']})")
+                    break
+                if t_step_dt >= t_launch_dt:
+                    print(f"  [Transfer] Truncating Parking Log at index {i} (Time: {step['time']})")
+                    break
+                truncated_log.append(step)
+            
+            self.add_log(truncated_log)
             
             # Update Launch State
             self.launch_state = best_step
@@ -104,9 +144,10 @@ class Transfer:
             # Direct Launch state
             pass
             
-    def execute_departure(self, thrust: float, isp: float, initial_mass: float):
+    def execute_departure(self, thrust: float, isp: float, initial_mass: float, arrival_periapsis_km: float = 0.0):
         """
         Plans and executes the departure burn (Finite Burn).
+        arrival_periapsis_km: Altitude of periapsis at arrival (B-Plane targeting).
         """
         if self.launch_state is None:
              raise ValueError("Setup departure first.")
@@ -125,7 +166,66 @@ class Transfer:
         # 2. Oberth / Lambert Guess
         # Calculate Lambert Arc (Interplanetary/Jovicentric)
         try:
-             v_lamb, _ = solve_lambert(r_launch, np.array(p_target), dt_sec, MU_JUP)
+             v_lamb, v_arr_lamb = solve_lambert(r_launch, np.array(p_target), dt_sec, MU_JUP)
+             
+             # Aimpoint Logic
+             final_target_pos = np.array(p_target)
+             print(f"  [Debug] arrival_periapsis_km = {arrival_periapsis_km}")
+             
+             if arrival_periapsis_km > 0:
+                 # Calculate V_inf at arrival
+                 p_arr, v_arr_body = self.engine.get_body_state(self.target, t_arr_iso)
+                 v_inf_vec = v_arr_lamb - np.array(v_arr_body)
+                 
+                 print(f"  [Debug] V_inf magnitude: {np.linalg.norm(v_inf_vec)}")
+                 
+                 # Construct B-Plane Vector
+                 # Transfer Plane Normal:
+                 h_vec = np.cross(r_launch, v_lamb)
+                 h_norm = np.linalg.norm(h_vec)
+                 h_hat = h_vec / h_norm
+                 
+                 # B-Vector (in plane) = h_hat cross v_inf_hat
+                 v_inf_norm = np.linalg.norm(v_inf_vec)
+                 v_inf_hat = v_inf_vec / v_inf_norm
+                 
+                 b_vec_dir = np.cross(h_hat, v_inf_hat)
+                 b_norm = np.linalg.norm(b_vec_dir)
+                 print(f"  [Debug] B-Vec Norm: {b_norm}")
+                 
+                 if b_norm < 1e-9:
+                     b_vec_dir = np.array([0,0,1]) # Fallback
+                 else:
+                     b_vec_dir = b_vec_dir / b_norm
+                 
+                 # Radius (Periapsis)
+                 radius_body = 2410.3 # Callisto default
+                 mu_target = self.engine.GM['callisto'] # Default
+                 
+                 if self.target == 'ganymede': 
+                     radius_body = 2634.1
+                     mu_target = self.engine.GM['ganymede']
+                 
+                 r_p = radius_body + arrival_periapsis_km
+                 
+                 # Impact Parameter (Gravitational Focusing)
+                 # b = r_p * sqrt(1 + 2*mu / (r_p * v_inf^2))
+                 v_inf_sq = np.dot(v_inf_vec, v_inf_vec)
+                 b_mag = r_p * np.sqrt(1 + 2 * mu_target / (r_p * v_inf_sq))
+                 
+                 print(f"  [Aimpoint] r_p: {r_p:.1f} km, v_inf: {np.sqrt(v_inf_sq):.3f} km/s")
+                 print(f"  [Aimpoint] Impact Parameter (b): {b_mag:.1f} km (Focusing Factor: {b_mag/r_p:.2f})")
+                 
+                 # Offset Target
+                 aimpoint = b_vec_dir * b_mag 
+                 final_target_pos = np.array(p_target) + aimpoint
+                 
+                 self.target_pos_vector = final_target_pos # Store for MCC
+                 
+                 dist_offset = np.linalg.norm(final_target_pos - np.array(p_target))
+                 print(f"  [Debug] Target Offset Distance: {dist_offset} km")
+                 print(f"  [Transfer] Retargeting to Periapsis: {arrival_periapsis_km:.1f} km")
+
              
              # Refine Guess using Oberth Effect (compensate for local gravity)
              # IF we are departing a moon (parking orbit context)
@@ -153,14 +253,17 @@ class Transfer:
                  v_guess = v_lamb
 
         except Exception as e:
-             print(f"Lambert/Oberth failed: {e}")
-             v_guess = (np.array(p_target) - r_launch) / dt_sec
+             print(f"Lambert Guess Failed: {e}")
+             # Fallback
+             v_guess = (final_target_pos - r_launch) / dt_sec
              
+        # 3. Solve (Impulsive Shooting)
+        # Uses JAX Newton-Raphson to hit *exact* target (Center or Offset)
         v_impulse_refined = self.planner.solve_impulsive_shooting(
             r_start=list(r_launch),
             t_start_iso=self.t_launch_iso,
             dt_seconds=dt_sec,
-            r_target=list(p_target),
+            r_target=list(final_target_pos),
             initial_v_guess=list(v_guess)
         )
         
@@ -200,7 +303,7 @@ class Transfer:
             r_start=start_state['position'], v_start=start_state['velocity'],
             t_start_iso=start_state['time'],
             t_burn_seconds=t_burn, t_coast_seconds=dt_coast,
-            target_pos=list(p_target),
+            target_pos=list(final_target_pos),
             mass_init=initial_mass,
             thrust=thrust, isp=isp,
             impulse_vector=dv_impulse,
@@ -213,7 +316,7 @@ class Transfer:
              t_start_iso=start_state['time'], dt_seconds=t_burn,
              lts_params=params, thrust=thrust, isp=isp, mass_init=initial_mass
         )
-        self.logs.append(burn_log)
+        self.add_log(burn_log)
         self.burn_end_state = burn_log[-1]
         
         return burn_log, t_burn, dv_mag
@@ -238,23 +341,29 @@ class Transfer:
             t_start_iso=end_burn['time'], dt_seconds=dt_coast,
             mass=end_burn['mass'], n_steps=100
         )
-        self.logs.append(coast_log)
+        self.add_log(coast_log)
         
         # Plan MCC
         t_arr_obj = t_launch_obj + timedelta(seconds=dt_flight)
         t_arr_iso = t_arr_obj.isoformat().replace('+00:00', 'Z')
-        p_target_arr, _ = self.engine.get_body_state(self.target, t_arr_iso)
+        
+        if self.target_pos_vector is not None:
+             r_target = self.target_pos_vector
+             print("  [MCC] Targeting previously defined Aimpoint (B-Plane).")
+        else:
+             p_target_body, _ = self.engine.get_body_state(self.target, t_arr_iso)
+             r_target = np.array(p_target_body)
         
         result = self.planner.plan_correction_maneuver(
             current_state=coast_log[-1],
-            target_pos=list(p_target_arr),
+            target_pos=list(r_target),
             target_time_iso=t_arr_iso,
             thrust=thrust, isp=isp,
             tolerance_km=10.0,
             previous_state=end_burn
         )
         
-        self.logs.append(result['maneuver_log'])
+        self.add_log(result['maneuver_log'])
         self.last_result = result
         
         return result

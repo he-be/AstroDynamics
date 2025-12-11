@@ -1,0 +1,275 @@
+Inspecting trajectory_lts.json...
+Total Data Points: 1461
+
+--- Scanning for Discontinuities ---
+Found 146 anomalies:
+  Index 192: Kinematic Mismatch! |dr/dt - v_state| = 7.908 km/s
+  Index 196: Kinematic Mismatch! |dr/dt - v_state| = 1.893 km/s
+  Index 197: Kinematic Mismatch! |dr/dt - v_state| = 6.667 km/s
+  Index 201: Kinematic Mismatch! |dr/dt - v_state| = 6.454 km/s
+  Index 202: Kinematic Mismatch! |dr/dt - v_state| = 5.575 km/s
+  Index 206: Kinematic Mismatch! |dr/dt - v_state| = 36.878 km/s
+  Index 207: Kinematic Mismatch! |dr/dt - v_state| = 5.837 km/s
+  Index 210: Kinematic Mismatch! |dr/dt - v_state| = 8.423 km/s
+  Index 211: Kinematic Mismatch! |dr/dt - v_state| = 38.976 km/s
+  Index 215: Kinematic Mismatch! |dr/dt - v_state| = 19.429 km/s
+  Index 216: Kinematic Mismatch! |dr/dt - v_state| = 20.243 km/s
+  Index 241: Time Duplicate or Reversal (dt=0.0s)
+  Index 242: Time Duplicate or Reversal (dt=0.0s)
+  Index 446: Time Duplicate or Reversal (dt=0.0s)
+  Index 461: Kinematic Mismatch! |dr/dt - v_state| = 4.258 km/s
+  Index 464: Kinematic Mismatch! |dr/dt - v_state| = 2.241 km/s
+  Index 467: Kinematic Mismatch! |dr/dt - v_state| = 1.079 km/s
+  Index 472: Kinematic Mismatch! |dr/dt - v_state| = 1.819 km/s
+  Index 475: Kinematic Mismatch! |dr/dt - v_state| = 9.733 km/s
+  Index 478: Kinematic Mismatch! |dr/dt - v_state| = 3.850 km/s
+  ... and more.
+
+Time Steps: Min=0.0s, Max=2408.6s, Median=30.0s
+Large Time Gaps detected (> 600.8s):
+  Index 242 -> 243: Gap 2404.7s (0.7h) at t=11848.7
+  Index 243 -> 244: Gap 1927.0s (0.5h) at t=14253.4
+  Index 245 -> 246: Gap 2404.7s (0.7h) at t=16658.1
+  Index 246 -> 247: Gap 1449.3s (0.4h) at t=19062.8
+  Index 247 -> 248: Gap 955.4s (0.3h) at t=20512.1
+  Index 248 -> 249: Gap 2404.7s (0.7h) at t=21467.4
+  Index 249 -> 250: Gap 971.6s (0.3h) at t=23872.1
+  Index 250 -> 251: Gap 1433.1s (0.4h) at t=24843.7
+  Index 251 -> 252: Gap 2404.7s (0.7h) at t=26276.8
+  Index 253 -> 254: Gap 1910.8s (0.5h) at t=29175.4
+  Index 254 -> 255: Gap 2404.7s (0.7h) at t=31086.2
+  Index 256 -> 257: Gap 2388.5s (0.7h) at t=33507.0
+  Index 257 -> 258: Gap 1943.2s (0.5h) at t=35895.5
+  Index 259 -> 260: Gap 2404.7s (0.7h) at t=38300.2
+  Index 260 -> 261: Gap 1465.5s (0.4h) at t=40704.9
+  Index 261 -> 262: Gap 939.2s (0.3h) at t=42170.4
+  Index 262 -> 263: Gap 2404.7s (0.7h) at t=43109.6
+  Index 263 -> 264: Gap 987.8s (0.3h) at t=45514.3
+  Index 264 -> 265: Gap 1416.9s (0.4h) at t=46502.0
+  Index 265 -> 266: Gap 2404.7s (0.7h) at t=47918.9
+  Index 267 -> 268: Gap 1894.6s (0.5h) at t=50833.7
+  Index 268 -> 269: Gap 2404.7s (0.7h) at t=52728.3
+  Index 270 -> 271: Gap 2372.3s (0.7h) at t=55165.4
+  Index 271 -> 272: Gap 1959.4s (0.5h) at t=57537.7
+  Index 273 -> 274: Gap 2404.7s (0.7h) at t=59942.3
+  Index 274 -> 275: Gap 1481.7s (0.4h) at t=62347.0
+  Index 275 -> 276: Gap 923.0s (0.3h) at t=63828.7
+  Index 276 -> 277: Gap 2404.7s (0.7h) at t=64751.7
+  Index 277 -> 278: Gap 1004.0s (0.3h) at t=67156.4
+  Index 278 -> 279: Gap 1400.7s (0.4h) at t=68160.3
+  Index 279 -> 280: Gap 2404.7s (0.7h) at t=69561.1
+  Index 281 -> 282: Gap 1878.4s (0.5h) at t=72492.0
+  Index 282 -> 283: Gap 2404.7s (0.7h) at t=74370.4
+  Index 284 -> 285: Gap 2356.1s (0.7h) at t=76823.7
+  Index 285 -> 286: Gap 1975.5s (0.5h) at t=79179.8
+  Index 287 -> 288: Gap 2404.7s (0.7h) at t=81584.5
+  Index 288 -> 289: Gap 1497.8s (0.4h) at t=83989.2
+  Index 289 -> 290: Gap 906.8s (0.3h) at t=85487.0
+  Index 290 -> 291: Gap 2404.7s (0.7h) at t=86393.8
+  Index 291 -> 292: Gap 1020.1s (0.3h) at t=88798.5
+  Index 292 -> 293: Gap 1384.5s (0.4h) at t=89818.7
+  Index 293 -> 294: Gap 2404.7s (0.7h) at t=91203.2
+  Index 295 -> 296: Gap 1862.2s (0.5h) at t=94150.3
+  Index 296 -> 297: Gap 2404.7s (0.7h) at t=96012.6
+  Index 298 -> 299: Gap 2339.9s (0.6h) at t=98482.0
+  Index 299 -> 300: Gap 1991.7s (0.6h) at t=100821.9
+  Index 301 -> 302: Gap 2404.7s (0.7h) at t=103226.6
+  Index 302 -> 303: Gap 1514.0s (0.4h) at t=105631.3
+  Index 303 -> 304: Gap 890.7s (0.2h) at t=107145.3
+  Index 304 -> 305: Gap 2404.7s (0.7h) at t=108036.0
+  Index 305 -> 306: Gap 1036.3s (0.3h) at t=110440.6
+  Index 306 -> 307: Gap 1368.4s (0.4h) at t=111477.0
+  Index 307 -> 308: Gap 2404.7s (0.7h) at t=112845.3
+  Index 309 -> 310: Gap 1846.1s (0.5h) at t=115808.6
+  Index 310 -> 311: Gap 2404.7s (0.7h) at t=117654.7
+  Index 312 -> 313: Gap 2323.8s (0.6h) at t=120140.3
+  Index 313 -> 314: Gap 2007.9s (0.6h) at t=122464.0
+  Index 315 -> 316: Gap 2404.7s (0.7h) at t=124868.7
+  Index 316 -> 317: Gap 1530.2s (0.4h) at t=127273.4
+  Index 317 -> 318: Gap 874.5s (0.2h) at t=128803.6
+  Index 318 -> 319: Gap 2404.7s (0.7h) at t=129678.1
+  Index 319 -> 320: Gap 1052.5s (0.3h) at t=132082.8
+  Index 320 -> 321: Gap 1352.2s (0.4h) at t=133135.3
+  Index 321 -> 322: Gap 2404.7s (0.7h) at t=134487.4
+  Index 323 -> 324: Gap 1829.9s (0.5h) at t=137466.9
+  Index 324 -> 325: Gap 2404.7s (0.7h) at t=139296.8
+  Index 326 -> 327: Gap 2307.6s (0.6h) at t=141798.6
+  Index 327 -> 328: Gap 2024.1s (0.6h) at t=144106.2
+  Index 329 -> 330: Gap 2404.7s (0.7h) at t=146510.9
+  Index 330 -> 331: Gap 1546.4s (0.4h) at t=148915.5
+  Index 331 -> 332: Gap 858.3s (0.2h) at t=150461.9
+  Index 332 -> 333: Gap 2404.7s (0.7h) at t=151320.2
+  Index 333 -> 334: Gap 1068.7s (0.3h) at t=153724.9
+  Index 334 -> 335: Gap 1336.0s (0.4h) at t=154793.6
+  Index 335 -> 336: Gap 2404.7s (0.7h) at t=156129.6
+  Index 337 -> 338: Gap 1813.7s (0.5h) at t=159125.3
+  Index 338 -> 339: Gap 2404.7s (0.7h) at t=160938.9
+  Index 340 -> 341: Gap 2291.4s (0.6h) at t=163456.9
+  Index 341 -> 342: Gap 2040.3s (0.6h) at t=165748.3
+  Index 343 -> 344: Gap 2404.7s (0.7h) at t=168153.0
+  Index 344 -> 345: Gap 1562.6s (0.4h) at t=170557.7
+  Index 345 -> 346: Gap 842.1s (0.2h) at t=172120.2
+  Index 346 -> 347: Gap 2404.7s (0.7h) at t=172962.3
+  Index 347 -> 348: Gap 1084.9s (0.3h) at t=175367.0
+  Index 348 -> 349: Gap 1319.8s (0.4h) at t=176451.9
+  Index 349 -> 350: Gap 2404.7s (0.7h) at t=177771.7
+  Index 350 -> 351: Gap 607.2s (0.2h) at t=180176.4
+  Index 351 -> 352: Gap 1797.5s (0.5h) at t=180783.6
+  Index 352 -> 353: Gap 2404.7s (0.7h) at t=182581.1
+  Index 354 -> 355: Gap 2275.2s (0.6h) at t=185115.2
+  Index 355 -> 356: Gap 2056.5s (0.6h) at t=187390.4
+  Index 357 -> 358: Gap 2404.7s (0.7h) at t=189795.1
+  Index 358 -> 359: Gap 1578.8s (0.4h) at t=192199.8
+  Index 359 -> 360: Gap 825.9s (0.2h) at t=193778.6
+  Index 360 -> 361: Gap 2404.7s (0.7h) at t=194604.5
+  Index 361 -> 362: Gap 1101.1s (0.3h) at t=197009.1
+  Index 362 -> 363: Gap 1303.6s (0.4h) at t=198110.2
+  Index 363 -> 364: Gap 2404.7s (0.7h) at t=199413.8
+  Index 364 -> 365: Gap 623.4s (0.2h) at t=201818.5
+  Index 365 -> 366: Gap 1781.3s (0.5h) at t=202441.9
+  Index 366 -> 367: Gap 2404.7s (0.7h) at t=204223.2
+  Index 368 -> 369: Gap 2259.0s (0.6h) at t=206773.5
+  Index 369 -> 370: Gap 2072.7s (0.6h) at t=209032.6
+  Index 371 -> 372: Gap 2404.7s (0.7h) at t=211437.2
+  Index 372 -> 373: Gap 1595.0s (0.4h) at t=213841.9
+  Index 373 -> 374: Gap 809.7s (0.2h) at t=215436.9
+  Index 374 -> 375: Gap 2404.7s (0.7h) at t=216246.6
+  Index 375 -> 376: Gap 1117.3s (0.3h) at t=218651.3
+  Index 376 -> 377: Gap 1287.4s (0.4h) at t=219768.5
+  Index 377 -> 378: Gap 2404.7s (0.7h) at t=221056.0
+  Index 378 -> 379: Gap 639.6s (0.2h) at t=223460.6
+  Index 379 -> 380: Gap 1765.1s (0.5h) at t=224100.2
+  Index 380 -> 381: Gap 2404.7s (0.7h) at t=225865.3
+  Index 382 -> 383: Gap 2242.8s (0.6h) at t=228431.9
+  Index 383 -> 384: Gap 2088.8s (0.6h) at t=230674.7
+  Index 385 -> 386: Gap 2404.7s (0.7h) at t=233079.4
+  Index 386 -> 387: Gap 1611.1s (0.4h) at t=235484.0
+  Index 387 -> 388: Gap 793.5s (0.2h) at t=237095.2
+  Index 388 -> 389: Gap 2404.7s (0.7h) at t=237888.7
+  Index 389 -> 390: Gap 1133.4s (0.3h) at t=240293.4
+  Index 390 -> 391: Gap 1271.2s (0.4h) at t=241426.8
+  Index 391 -> 392: Gap 2404.7s (0.7h) at t=242698.1
+  Index 392 -> 393: Gap 655.7s (0.2h) at t=245102.8
+  Index 393 -> 394: Gap 1748.9s (0.5h) at t=245758.5
+  Index 394 -> 395: Gap 2393.0s (0.7h) at t=247507.4
+  Index 447 -> 448: Gap 2242.2s (0.6h) at t=250090.2
+  Index 448 -> 449: Gap 2089.5s (0.6h) at t=252332.4
+  Index 450 -> 451: Gap 2408.6s (0.7h) at t=254741.0
+  Index 451 -> 452: Gap 1603.9s (0.4h) at t=257149.6
+  Index 452 -> 453: Gap 804.7s (0.2h) at t=258753.5
+  Index 453 -> 454: Gap 2408.6s (0.7h) at t=259558.2
+  Index 454 -> 455: Gap 1118.4s (0.3h) at t=261966.8
+  Index 455 -> 456: Gap 1290.3s (0.4h) at t=263085.2
+  Index 456 -> 457: Gap 2408.6s (0.7h) at t=264375.4
+  Index 457 -> 458: Gap 632.8s (0.2h) at t=266784.0
+  Index 458 -> 459: Gap 1775.8s (0.5h) at t=267416.8
+  Index 459 -> 460: Gap 2408.6s (0.7h) at t=269192.6
+  Index 461 -> 462: Gap 2261.4s (0.6h) at t=271748.5
+  Index 462 -> 463: Gap 2070.3s (0.6h) at t=274009.9
+  Index 464 -> 465: Gap 2408.6s (0.7h) at t=276418.5
+  Index 465 -> 466: Gap 1584.7s (0.4h) at t=278827.1
+  Index 466 -> 467: Gap 823.9s (0.2h) at t=280411.8
+  Index 467 -> 468: Gap 2408.6s (0.7h) at t=281235.7
+  Index 468 -> 469: Gap 1099.2s (0.3h) at t=283644.3
+  Index 469 -> 470: Gap 1309.4s (0.4h) at t=284743.5
+  Index 470 -> 471: Gap 2408.6s (0.7h) at t=286052.9
+  Index 471 -> 472: Gap 613.6s (0.2h) at t=288461.5
+  Index 472 -> 473: Gap 1795.0s (0.5h) at t=289075.1
+  Index 473 -> 474: Gap 2408.6s (0.7h) at t=290870.1
+  Index 475 -> 476: Gap 2280.5s (0.6h) at t=293406.8
+  Index 476 -> 477: Gap 2051.1s (0.6h) at t=295687.3
+  Index 478 -> 479: Gap 2408.6s (0.7h) at t=298096.0
+  Index 479 -> 480: Gap 1565.6s (0.4h) at t=300504.6
+  Index 480 -> 481: Gap 843.1s (0.2h) at t=302070.1
+  Index 481 -> 482: Gap 2408.6s (0.7h) at t=302913.2
+  Index 482 -> 483: Gap 1080.0s (0.3h) at t=305321.8
+  Index 483 -> 484: Gap 1328.6s (0.4h) at t=306401.8
+  Index 484 -> 485: Gap 2408.6s (0.7h) at t=307730.4
+  Index 486 -> 487: Gap 1814.2s (0.5h) at t=310733.4
+  Index 487 -> 488: Gap 2408.6s (0.7h) at t=312547.6
+  Index 489 -> 490: Gap 2299.7s (0.6h) at t=315065.1
+  Index 490 -> 491: Gap 2031.9s (0.6h) at t=317364.8
+  Index 492 -> 493: Gap 2408.6s (0.7h) at t=319773.4
+  Index 493 -> 494: Gap 1546.4s (0.4h) at t=322182.1
+  Index 494 -> 495: Gap 862.2s (0.2h) at t=323728.4
+  Index 495 -> 496: Gap 2408.6s (0.7h) at t=324590.7
+  Index 496 -> 497: Gap 1060.8s (0.3h) at t=326999.3
+  Index 497 -> 498: Gap 1347.8s (0.4h) at t=328060.1
+  Index 498 -> 499: Gap 2408.6s (0.7h) at t=329407.9
+  Index 500 -> 501: Gap 1833.3s (0.5h) at t=332391.8
+  Index 501 -> 502: Gap 2408.6s (0.7h) at t=334225.1
+  Index 503 -> 504: Gap 2318.9s (0.6h) at t=336723.4
+  Index 504 -> 505: Gap 2012.8s (0.6h) at t=339042.3
+  Index 506 -> 507: Gap 2408.6s (0.7h) at t=341450.9
+  Index 507 -> 508: Gap 1527.2s (0.4h) at t=343859.5
+  Index 508 -> 509: Gap 881.4s (0.2h) at t=345386.7
+  Index 509 -> 510: Gap 2408.6s (0.7h) at t=346268.1
+  Index 510 -> 511: Gap 1041.7s (0.3h) at t=348676.8
+  Index 511 -> 512: Gap 1367.0s (0.4h) at t=349718.4
+  Index 512 -> 513: Gap 2408.6s (0.7h) at t=351085.4
+  Index 514 -> 515: Gap 1852.5s (0.5h) at t=354050.1
+  Index 515 -> 516: Gap 2408.6s (0.7h) at t=355902.6
+  Index 517 -> 518: Gap 2338.1s (0.6h) at t=358381.7
+  Index 518 -> 519: Gap 1993.6s (0.6h) at t=360719.8
+  Index 520 -> 521: Gap 2408.6s (0.7h) at t=363128.4
+  Index 521 -> 522: Gap 1508.0s (0.4h) at t=365537.0
+  Index 522 -> 523: Gap 900.6s (0.3h) at t=367045.1
+  Index 523 -> 524: Gap 2408.6s (0.7h) at t=367945.6
+  Index 524 -> 525: Gap 1022.5s (0.3h) at t=370354.2
+  Index 525 -> 526: Gap 1386.1s (0.4h) at t=371376.7
+  Index 526 -> 527: Gap 2408.6s (0.7h) at t=372762.9
+  Index 528 -> 529: Gap 1871.7s (0.5h) at t=375708.4
+  Index 529 -> 530: Gap 2408.6s (0.7h) at t=377580.1
+  Index 531 -> 532: Gap 2357.2s (0.7h) at t=380040.0
+  Index 532 -> 533: Gap 1974.4s (0.5h) at t=382397.3
+  Index 534 -> 535: Gap 2408.6s (0.7h) at t=384805.9
+  Index 535 -> 536: Gap 1488.9s (0.4h) at t=387214.5
+  Index 536 -> 537: Gap 919.8s (0.3h) at t=388703.4
+  Index 537 -> 538: Gap 2408.6s (0.7h) at t=389623.1
+  Index 538 -> 539: Gap 1003.3s (0.3h) at t=392031.7
+  Index 539 -> 540: Gap 1405.3s (0.4h) at t=393035.0
+  Index 540 -> 541: Gap 2408.6s (0.7h) at t=394440.3
+  Index 542 -> 543: Gap 1890.9s (0.5h) at t=397366.7
+  Index 543 -> 544: Gap 2408.6s (0.7h) at t=399257.6
+  Index 545 -> 546: Gap 2376.4s (0.7h) at t=401698.4
+  Index 546 -> 547: Gap 1955.2s (0.5h) at t=404074.8
+  Index 548 -> 549: Gap 2408.6s (0.7h) at t=406483.4
+  Index 549 -> 550: Gap 1469.7s (0.4h) at t=408892.0
+  Index 550 -> 551: Gap 938.9s (0.3h) at t=410361.7
+  Index 551 -> 552: Gap 2408.6s (0.7h) at t=411300.6
+  Index 552 -> 553: Gap 984.1s (0.3h) at t=413709.2
+  Index 553 -> 554: Gap 1424.5s (0.4h) at t=414693.4
+  Index 554 -> 555: Gap 2408.6s (0.7h) at t=416117.8
+  Index 556 -> 557: Gap 1910.0s (0.5h) at t=419025.0
+  Index 557 -> 558: Gap 2408.6s (0.7h) at t=420935.1
+  Index 559 -> 560: Gap 2395.6s (0.7h) at t=423356.7
+  Index 560 -> 561: Gap 1936.1s (0.5h) at t=425752.3
+  Index 562 -> 563: Gap 2408.6s (0.7h) at t=428160.9
+  Index 563 -> 564: Gap 1450.5s (0.4h) at t=430569.5
+  Index 564 -> 565: Gap 958.1s (0.3h) at t=432020.0
+  Index 565 -> 566: Gap 2408.6s (0.7h) at t=432978.1
+  Index 566 -> 567: Gap 965.0s (0.3h) at t=435386.7
+  Index 567 -> 568: Gap 1443.7s (0.4h) at t=436351.7
+  Index 568 -> 569: Gap 2408.6s (0.7h) at t=437795.3
+
+--- Tail Inspection (Last 10 points) ---
+[1451] t=509705.8, pos=[-1889168.3, 354492.4, 139991.1]
+    dt=30.0s, dr=266.4km, v=8.9 km/s
+[1452] t=509735.8, pos=[-1889258.0, 354265.5, 139884.2]
+    dt=30.0s, dr=266.4km, v=8.9 km/s
+[1453] t=509765.8, pos=[-1889347.7, 354038.6, 139777.3]
+    dt=30.0s, dr=266.4km, v=8.9 km/s
+[1454] t=509795.9, pos=[-1889437.4, 353811.7, 139670.4]
+    dt=30.0s, dr=266.4km, v=8.9 km/s
+[1455] t=509825.9, pos=[-1889527.0, 353584.8, 139563.5]
+    dt=30.0s, dr=266.3km, v=8.9 km/s
+[1456] t=509856.0, pos=[-1889616.5, 353357.9, 139456.6]
+    dt=30.0s, dr=266.3km, v=8.9 km/s
+[1457] t=509886.0, pos=[-1889706.1, 353131.0, 139349.7]
+    dt=30.0s, dr=266.3km, v=8.9 km/s
+[1458] t=509916.0, pos=[-1889795.6, 352904.1, 139242.8]
+    dt=30.0s, dr=266.3km, v=8.9 km/s
+[1459] t=509946.1, pos=[-1889885.1, 352677.1, 139135.9]
+    dt=30.0s, dr=266.3km, v=8.9 km/s
+[1460] t=509976.1, pos=[-1889974.5, 352450.2, 139029.0]
+    dt=30.0s, dr=266.3km, v=8.9 km/s
