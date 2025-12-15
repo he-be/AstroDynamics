@@ -21,24 +21,74 @@ class Transfer:
         self.target_pos_vector = None # Targeted arrival position (B-Plane)
         
     def add_log(self, new_log: list):
-        """Append a new log segment, handling overlaps."""
+        """
+        Append a new log segment, handling overlaps by truncating history (Branching).
+        Enforces strict time monotonicity.
+        """
         if not new_log: return
         
-        if self.logs and self.logs[-1]:
-            last_entry = self.logs[-1][-1]
-            
-            # Robust comparison using datetime
-            t_last = datetime.fromisoformat(last_entry['time'].replace('Z', '+00:00'))
-            t_new = datetime.fromisoformat(new_log[0]['time'].replace('Z', '+00:00'))
-            
-            dt = abs((t_new - t_last).total_seconds())
-            
-            if dt < 0.1: # 100ms tolerance
-                # Skip duplicate start
-                new_log = new_log[1:]
+        t_new_start = datetime.fromisoformat(new_log[0]['time'].replace('Z', '+00:00'))
+        
+        # Backtrack: Remove future history if new log starts in the past
+        while self.logs:
+            last_segment = self.logs[-1]
+            if not last_segment:
+                self.logs.pop()
+                continue
                 
+            t_last_end = datetime.fromisoformat(last_segment[-1]['time'].replace('Z', '+00:00'))
+            
+            # If new start is AFTER last end (with tolerance), we are good
+            if (t_new_start - t_last_end).total_seconds() >= -0.001:
+                break
+            
+            # If Overlap: Truncate the last segment
+            # Find cut point
+            # We want to keep points strictly BEFORE t_new_start
+            cut_idx = -1
+            for i in range(len(last_segment)):
+                t_p = datetime.fromisoformat(last_segment[i]['time'].replace('Z', '+00:00'))
+                if (t_p - t_new_start).total_seconds() >= -0.001:
+                    # Found point >= new_start. Cut everything from here onwards.
+                    cut_idx = i
+                    break
+            
+            if cut_idx != -1:
+                print(f"  [Transfer] Overlap detected. Truncating log segment at index {cut_idx} (Time {last_segment[cut_idx]['time']})")
+                self.logs[-1] = last_segment[:cut_idx]
+                # If segment became empty, pop it
+                if not self.logs[-1]:
+                    self.logs.pop()
+            else:
+                 # If we are here, it means the entire segment is BEFORE new_start?
+                 # But outer loop check said t_new_start < t_last_end
+                 # This implies t_new_start is INSIDE the segment (found by loop)
+                 # OR t_new_start is BEFORE the segment start?
+                 t_last_start = datetime.fromisoformat(last_segment[0]['time'].replace('Z', '+00:00'))
+                 if t_new_start < t_last_start:
+                     # Entire segment is in future. Drop it.
+                     self.logs.pop()
+                 else:
+                     break
+        
+        # Check for precise duplicate at usage boundary
+        if self.logs and self.logs[-1]:
+             t_last_end = datetime.fromisoformat(self.logs[-1][-1]['time'].replace('Z', '+00:00'))
+             # Loop to trim leading points that match within tolerance
+             while new_log:
+                 t_new_start = datetime.fromisoformat(new_log[0]['time'].replace('Z', '+00:00'))
+                 delta = (t_new_start - t_last_end).total_seconds()
+                 if delta < 0.05:
+                     # print(f"[Transfer] Popping duplicate time {t_new_start} (dt={delta:.3f})")
+                     new_log.pop(0)
+                     # print(f"[Transfer] Popping duplicate time {t_new_start} (dt={delta:.3f})")
+                     new_log.pop(0)
+                 else:
+                     break
+
+        # Append
         if new_log:
-            self.logs.append(new_log)
+             self.logs.append(new_log)
 
     def find_window(self, start_time_iso: str, window_days: float, flight_time_days: float, dt_step_hours: float = 6.0):
         """
@@ -331,7 +381,7 @@ class Transfer:
         ve = isp * g0 / 1000.0
         m_dot = thrust / (ve * 1000.0)
         t_burn = (initial_mass * (1.0 - np.exp(-dv_mag/ve))) / m_dot
-        t_burn *= 1.01
+        t_burn *= 1.10 # Increased margin for gravity loss
         
         # Heuristic Offset
         t_start_burn_obj = t_launch_obj - timedelta(seconds=t_burn/2.0)
@@ -339,17 +389,53 @@ class Transfer:
         
         # Propagate parking to start burn (Back or Fwd)
         p_state_time_obj = datetime.fromisoformat(self.launch_state['time'].replace('Z', '+00:00'))
-        dt_prop = (t_start_burn_obj - p_state_time_obj).total_seconds()
         
-        # Use existing trajectory or propagate
-        # Assuming launch_state was from a log, we might need new propagation if dt < 0
-        # If dt > 0, we propagate.
-        pre_burn_log = self.planner.evaluate_trajectory(
-            r_start=self.launch_state['position'], v_start=self.launch_state['velocity'],
-            t_start_iso=self.launch_state['time'], dt_seconds=dt_prop,
-            mass=initial_mass, n_steps=50
-        )
-        start_state = pre_burn_log[-1]
+        # Fix: Find exact start state from existing parking log to ensure continuity
+        start_state = None
+        
+        if self.logs and self.logs[-1]:
+            parking_log = self.logs[-1]
+            # Assumes sorted time
+            
+            # Find interval t_i <= t_burn_start < t_i+1
+            idx_found = -1
+            for i in range(len(parking_log)-1):
+                t0_str = parking_log[i]['time']
+                t1_str = parking_log[i+1]['time']
+                t0 = datetime.fromisoformat(t0_str.replace('Z', '+00:00'))
+                t1 = datetime.fromisoformat(t1_str.replace('Z', '+00:00'))
+                
+                if t0 <= t_start_burn_obj <= t1:
+                    idx_found = i
+                    break
+            
+            if idx_found != -1:
+                state_base = parking_log[idx_found]
+                t_base = datetime.fromisoformat(state_base['time'].replace('Z', '+00:00'))
+                dt_gap = (t_start_burn_obj - t_base).total_seconds()
+                
+                if dt_gap > 0.001:
+                    # Small propagation to close gap
+                    gap_log = self.planner.evaluate_trajectory(
+                        r_start=state_base['position'], v_start=state_base['velocity'],
+                        t_start_iso=state_base['time'], dt_seconds=dt_gap,
+                        mass=initial_mass, n_steps=2
+                    )
+                    start_state = gap_log[-1]
+                else:
+                    start_state = state_base
+                print(f"  [Departure] Burn Start stitched to Parking Log (Index {idx_found}, Offset {dt_gap:.3f}s)")
+        
+        if start_state is None:
+            # Fallback: Backward propagation if not found (e.g. burn starts before parking log?)
+            print("  [Departure] Burn Start outside Parking Log. Propagating backward...")
+            dt_prop = (t_start_burn_obj - p_state_time_obj).total_seconds()
+            pre_burn_log = self.planner.evaluate_trajectory(
+                r_start=self.launch_state['position'], v_start=self.launch_state['velocity'],
+                t_start_iso=self.launch_state['time'], dt_seconds=dt_prop,
+                mass=initial_mass, n_steps=50
+            )
+            start_state = pre_burn_log[-1]
         
         # Solve LTS
         print("Solving Departure Burn...")
@@ -510,6 +596,15 @@ class Transfer:
         u_dir = dv_vec / np.linalg.norm(dv_vec)
         params = list(u_dir)
         
+        # FIX: Truncate logs at periapsis to prepare for seamless stitching
+        if self.logs:
+             # We want to keep everything UP TO best_idx (exclusive, as Capture starts there)
+             # But periapsis_state is at best_idx. 
+             # So we cut at best_idx.
+             print(f"  [Capture] Truncating coast log at index {best_idx} (t={periapsis_state['time']})")
+             self.logs[-1] = self.logs[-1][:best_idx]
+             if not self.logs[-1]: self.logs.pop()
+
         # 4. Execute Burn (Constant Steering)
         capture_log = self.planner.evaluate_burn(
              r_start=periapsis_state['position'],

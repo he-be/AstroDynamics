@@ -45,7 +45,7 @@ def run_jax_lts_scenario():
     
     # 4. Setup Departure (Parking Orbit)
     transfer.setup_departure(
-        parking_orbit={'altitude': 500.0, 'body': 'ganymede'}
+        parking_orbit={'altitude': 1000.0, 'body': 'ganymede'}
     )
     
     # 5. Execute Departure
@@ -53,7 +53,7 @@ def run_jax_lts_scenario():
         thrust=2000.0,
         isp=3000.0,
         initial_mass=1000.0,
-        arrival_periapsis_km=500.0 # Target 500km altitude, NOT impact
+        arrival_periapsis_km=1000.0 # Target 1000km altitude
     )
     
     # 6. Corrections (TCM-1 & TCM-2)
@@ -77,8 +77,20 @@ def run_jax_lts_scenario():
     t_arrival_nom = t_launch_ref + timedelta(days=transfer.flight_time_days)
     
     dt_to_arr = (t_arrival_nom - last_t_obj).total_seconds()
+    print(f"[Debug] Coast Logic: last_t={last_t_obj}, arr_nom={t_arrival_nom}, dt={dt_to_arr}")
+    
+    # Propagate Coast to Arrival
+    if dt_to_arr > 0:
+         print(f"Coasting to Arrival: {dt_to_arr/3600:.1f} h")
+         coast_log = transfer.planner.evaluate_trajectory(
+             r_start=last_log['position'], v_start=last_log['velocity'],
+             t_start_iso=last_log['time'], dt_seconds=dt_to_arr,
+             mass=last_log['mass'], n_steps=100
+         )
+         transfer.add_log(coast_log)
+    
     # 8. Capture Burn
-    transfer.execute_arrival()
+    transfer.execute_arrival(periapsis_alt_km=1000.0)
     
     # 9. Automated Validation
     

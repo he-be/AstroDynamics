@@ -1,0 +1,118 @@
+=== US-10: Ganymede Launch Window Search & LTS (Refactored) ===
+Loading Ephemeris kernels... (this may take a while on first run)
+Scanning 20.0 days for optimal window (ganymede -> callisto)...
+Scanning Launch Windows (Lambert Filter, step 6.0h)...
+Top 3 Windows (Lambert Estimate):
+  2025-10-01T00:00:00+00:00: ~5081.3 m/s
+  2025-09-18T12:00:00+00:00: ~5239.9 m/s
+  2025-10-01T06:00:00+00:00: ~5514.0 m/s
+Optimal Window Selected: 2025-10-01T00:00:00+00:00 (Lambert DV: 5081.3 m/s)
+--> Selected Launch: 2025-10-01T00:00:00Z
+Parking Duration: 13.00 days
+Simulating Parking Orbit & Phasing...
+  Orbit Period: 184.8 mins
+  [Transfer] Truncating Parking Log at index 166 (Time: 2025-10-01T02:46:42.047484Z)
+  Phased Launch Time: 2025-10-01T02:46:42.047484Z
+  [Debug] arrival_periapsis_km = 500.0
+  [Debug] V_inf magnitude: 4.8983207780631925
+  [Debug] B-Vec Norm: 0.998212234917666
+  [Aimpoint] r_p: 2910.3 km, v_inf: 4.898 km/s
+  [Aimpoint] Impact Parameter (b): 3195.5 km (Focusing Factor: 1.10)
+  [Debug] Target Offset Distance: 3195.538967252272 km
+  [Transfer] Retargeting to Periapsis: 500.0 km
+  Using Oberth-Corrected Guess.
+[JAXPlanner] Starting Differential Correction (Newton-Raphson)...
+  Iter 0: Error 2031819.055 km
+  Iter 1: Error 505347.673 km
+  Iter 2: Error 48961.055 km
+  Iter 3: Error 2979.562 km
+  Iter 4: Error 47.900 km
+  Iter 5: Error 0.054 km
+  Converged! Final Error: 0.054 km
+Departure Delta-V: 4405.6 m/s
+Solving Departure Burn...
+[JAXPlanner] Solving Finite Burn + Coast (Target: 100.0 km)...
+  Iter 0: LossSq 932986.4
+  Iter 100: LossSq 89492.0
+  Iter 200: LossSq 36614.2
+  Iter 300: LossSq 21301.4
+  Iter 400: LossSq 17066.0
+  Iter 500: LossSq 15991.3
+  Iter 600: LossSq 15720.6
+  Iter 700: LossSq 15633.7
+  Iter 800: LossSq 15582.6
+  Iter 900: LossSq 15535.8
+  Iter 1000: LossSq 15487.4
+  Iter 1100: LossSq 15461.9
+  Iter 1200: LossSq 15434.9
+  Iter 1300: LossSq 15406.4
+  Iter 1400: LossSq 15376.4
+  Iter 1500: LossSq 15345.0
+  Iter 1600: LossSq 15312.3
+  Iter 1700: LossSq 15278.1
+  Iter 1800: LossSq 15242.7
+  Iter 1900: LossSq 15206.0
+  Iter 2000: LossSq 15168.0
+  Iter 2100: LossSq 15148.3
+  Iter 2200: LossSq 15127.8
+  Iter 2300: LossSq 15106.4
+  Iter 2400: LossSq 15084.1
+  Iter 2500: LossSq 15060.9
+  Iter 2600: LossSq 15036.8
+  Iter 2700: LossSq 15011.8
+  Iter 2800: LossSq 14985.9
+  Iter 2900: LossSq 14959.2
+Coasting to MCC: 167.7 h
+  [MCC] Targeting previously defined Aimpoint (B-Plane).
+[JAXPlanner] Solving Finite Burn + Coast (Target: 10.0 km)...
+  Iter 0: LossSq 34715.8
+  Iter 100: LossSq 10365.4
+  Iter 200: LossSq 630.2
+  Converged at Iter 269: 9.7 km
+TCM-1 Sufficient. Skipping TCM-2.
+Propagating past arrival to find Periapsis (High Res)...
+
+[Transfer] executing Arrival/Capture (e=0.0, alt=500.0 km)...
+  ERROR: No approach found in last log.
+
+=== Flyby / Grazing Analysis (from full_log after arrival) ===
+Periapsis Altitude: 785.4 km (at 2025-10-15T02:46:42.047484Z)
+V_flyby: 5177.6 m/s
+V_circ:  1498.8 m/s
+Est. Capture DV: 3678.8 m/s
+Departure DV: 4405.6 m/s
+Total DV (Dep+Cap): 8084.4 m/s
+[Result] Deviation from 500km: 285.4 km
+Saved scenario_jax_lts.png
+Exporting (MissionManifest format) to trajectory_lts.json...
+Saved trajectory_lts.json
+
+=== Automated Validation ===
+[Validator] Inspecting trajectory_lts.json...
+[Validator] Found 227 Warnings:
+  Index 215->216: Large Time Gap (6098.7s)
+  Index 216->217: Large Time Gap (6098.7s)
+  Index 217->218: Large Time Gap (6098.7s)
+  Index 218->219: Large Time Gap (6098.7s)
+  Index 219->220: Large Time Gap (6098.7s)
+  ... and 222 more.
+[Validator] CRITICAL: Found 28 Errors!
+  Index 365: Time Duplicate or Reversal (dt=0.0s)
+  Index 155: SEVERE Kinematic Mismatch (7.2 km/s)
+      Pos Jump: 30.2 km. Apparent V: 10.7. State V: 10.5
+  Index 160: SEVERE Kinematic Mismatch (20.9 km/s)
+      Pos Jump: 83.1 km. Apparent V: 26.2. State V: 10.6
+  Index 162: SEVERE Kinematic Mismatch (6.3 km/s)
+      Pos Jump: 157.9 km. Apparent V: 10.6. State V: 10.7
+  Index 165: SEVERE Kinematic Mismatch (15.6 km/s)
+      Pos Jump: 197.7 km. Apparent V: 21.5. State V: 10.8
+  Index 167: SEVERE Kinematic Mismatch (20.6 km/s)
+      Pos Jump: 178.7 km. Apparent V: 20.1. State V: 10.8
+  Index 168: SEVERE Kinematic Mismatch (6.1 km/s)
+      Pos Jump: 466.4 km. Apparent V: 14.0. State V: 10.9
+  Index 169: SEVERE Kinematic Mismatch (8.5 km/s)
+      Pos Jump: 310.0 km. Apparent V: 11.5. State V: 10.9
+  Index 170: SEVERE Kinematic Mismatch (16.5 km/s)
+      Pos Jump: 341.8 km. Apparent V: 22.5. State V: 10.9
+  Index 172: Teleportation? Apparent V=101.5 km/s (State V=11.0)
+!!! VALIDATION FAILED - Check errors above !!!

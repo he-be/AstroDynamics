@@ -82,15 +82,15 @@ class JAXEngine:
             dm = 0.0
             
             if steering_mode == 'constant':
-                # args: [tx, ty, tz, flow_rate]
-                thrust_vec = args[0:3]
+                # args: [ux, uy, uz, flow_rate, thrust_mag]
+                u_vec = args[0:3]
                 flow_rate = args[3]
+                thrust_mag = args[4]
                 
                 # F = ma -> a = F/m
-                # thrust_vec is Force vector
-                acc_t = thrust_vec / (mass_ship * 1000.0) # Convert kg to T? No, standard Units: km, s, kg.
-                # If Force is Newtons (kg*m/s^2), and Mass is kg. Acc is m/s^2.
-                # We work in km. So divide by 1000.
+                # u_vec is Unit Direction
+                force_vec = u_vec * thrust_mag
+                acc_t = force_vec / (mass_ship * 1000.0) 
                 
                 dm = -flow_rate
                 

@@ -46,7 +46,7 @@ class TrajectoryValidator:
             dt = t_curr - t_prev
             
             if dt <= 0:
-                self.errors.append(f"Index {i}: Time Duplicate or Reversal (dt={dt}s)")
+                self.errors.append(f"Index {i}: Time Duplicate or Reversal (dt={dt}s) at t={t_curr}")
             
             dts.append(dt)
             t_prev = t_curr
@@ -138,13 +138,17 @@ class TrajectoryValidator:
                     active_maneuver['obs_dv'] += dv_step
                     active_maneuver['matched'] = True 
                     continue
-                else:
-                    # Mismatch in rate
-                    # Maybe it's just the edge of the burn?
-                    if dv_step < tolerance: # Negligible
-                        continue
-                    # Else warning
-                    self.warnings.append(f"Index {i}: Burn Rate Mismatch at t={t_mid:.1f}. Obs {dv_step:.3f} vs Exp {exp_dv_step:.3f}")
+                if dt <= 0.001:
+                    # Check for exact duplicate vs reversal
+                    msg = "Time Duplicate" if dt > -0.001 else "Time Reversal"
+                    self.errors.append((i, f"{msg} (dt={dt:.6f}s) at t={curr['time']}"))
+                    continue
+                # Mismatch in rate
+                # Maybe it's just the edge of the burn?
+                if dv_step < tolerance: # Negligible
+                    continue
+                # Else warning
+                self.warnings.append(f"Index {i}: Burn Rate Mismatch at t={t_mid:.1f}. Obs {dv_step:.3f} vs Exp {exp_dv_step:.3f}")
             
             # If not a verified burn step, check Physics
             if v_diff > v_tol:

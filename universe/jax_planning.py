@@ -363,8 +363,8 @@ class JAXPlanner:
                               isp: float,
                               initial_params_guess: np.ndarray = None,
                               impulse_vector: np.ndarray = None,
-                              tol_km: float = 1.0,
-                              max_iter: int = 3000):
+                              tol_km: float = 10.0,
+                              max_iter: int = 15000):
         """
         Optimizes LTS parameters for a finite burn followed by a coast phase.
         Global Objective: Hit target_pos at t_start + t_burn + t_coast.
@@ -442,12 +442,16 @@ class JAXPlanner:
             a_vec = scaled_ab[0:3]
             reg_err = (jnp.linalg.norm(a_vec) - 1.0)**2
             
-            return pos_err + 1000.0 * reg_err
+            return pos_err + 100.0 * reg_err
 
         # Optimization Loop
         schedule = optax.piecewise_constant_schedule(
-            init_value=0.05,
-            boundaries_and_scales={1000: 0.5, 2000: 0.5}
+            init_value=0.1,
+            boundaries_and_scales={
+                2000: 0.5, # 0.05
+                5000: 0.2, # 0.01
+                10000: 0.5 # 0.005
+            }
         )
         optimizer = optax.adam(learning_rate=schedule)
         opt_state = optimizer.init(init_params)
@@ -460,17 +464,19 @@ class JAXPlanner:
             params = optax.apply_updates(params, updates)
             return params, opt_state, loss
 
-        print(f"[JAXPlanner] Solving Finite Burn + Coast (Target: {tol_km} km)...")
+        print(f"[JAXPlanner] Solving Finite Burn + Coast (Target: {tol_km} km) [MaxIter {max_iter}]...")
         for i in range(max_iter):
             params, opt_state, loss = step(params, opt_state)
             err_km = float(jnp.sqrt(loss)) 
             
-            if i % 100 == 0:
-                print(f"  Iter {i}: LossSq {err_km:.1f}")
+            if i % 500 == 0:
+                print(f"  Iter {i}: Error {err_km:.1f} km")
                 
             if err_km < tol_km:
                  print(f"  Converged at Iter {i}: {err_km:.1f} km")
                  break
+        else:
+             print(f"  [Warning] Max iterations reached. Final Error: {err_km:.1f} km")
         
         return np.array(params)
 
@@ -629,7 +635,7 @@ class JAXPlanner:
                  pass # print(f"  scan {i}/{n_steps}: best dv {best_dv:.1f}")
 
         if best_launch_time:
-            print(f"Optimal Window Selected: {best_launch_time.isoformat()} (Lambert DV: {best_dv:.1f} m/s, TOF: {best_flight_time/86400:.2f}d)")
+            print(f"Optimal Window Selected: {best_launch_time.isoformat()} (Lambert DV: {best_dv:.1f} km/s, TOF: {best_flight_time/86400:.2f}d)")
             return best_launch_time, best_flight_time, jnp.array(best_v_impulse)
         else:
             print("Warning: No valid window found.")
@@ -834,7 +840,7 @@ class JAXPlanner:
         
         return {
             'skipped': False,
-            'maneuver_log': burn_log + final_coast_log,
+            'maneuver_log': burn_log[:-1] + final_coast_log,
             'final_error_km': float(err_final),
             'start_time': t_start_burn_iso,
             'duration': t_burn,
